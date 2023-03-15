@@ -734,3 +734,25 @@ stat.desc(step.control)
 stat.desc(step.cyan)
 
 #is there a difference between treatments for step length
+library(car)
+
+s1 <- lm(step~treatcode, data=gynetracks.psf2)
+car::Anova(s1, type =2) #yes significant
+
+# is there a difference between treatments x time period for step length
+
+s2 <- lm (step ~ treatcode * daytime, data = gynetracks.psf2)
+car::Anova(s2, type = 3)
+
+#step length x treatment x land cover
+
+s3 <- lm (step ~ treatcode * landtype, data= gynetracks.psf2)
+car::Anova(s3, type = 3)
+
+#step length x treatment x land cover x time period
+
+s4<- lm (step ~ treatcode * landtype * daytime, data= gynetracks.psf2)
+car::Anova(s4, type = 3)
+library(emmeans)
+s4.a <-emmeans(s4, pairwise ~ treatcode * landtype *daytime, data=gynetracks.psf2)
+s4.b <- data.frame(s4.a$contrasts) %>% filter(p.value < 0.05)
