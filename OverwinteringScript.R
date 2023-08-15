@@ -627,7 +627,7 @@ getTrueCoords <- function(df){ ## revise the true steps to match the same as ran
     mutate(x2 = lead(x), y2 = lead(y)) %>%  ## create a new column for the end travel point
     filter(!is.na(x2)) %>%  ## drop all initial x-y that don't have an end point
     mutate(case = "true") %>%  ## add a column to identify true
-    select(case, x1 = x, y1 = y, x2, y2, sl = step, ta = angle) ## match same data structure
+    dplyr::select(case, x1 = x, y1 = y, x2, y2, sl = step, ta = angle) ## match same data structure
   return(revisedCoordsDF)
 }
 trueCoords <- getTrueCoords(tracks.out2) ## revise data to get all true points
@@ -713,13 +713,13 @@ landex<- raster::extract(landcover, gynetracks.ps) #makes a vector of landcover 
 gynetracks.ps$landtype <- landex
 gynetracks.psf<-as.data.frame(gynetracks.ps)
 landClasses <- data.frame(landtype = 1:7, landTypeNew = c("agriculture","developed","forest", "highFloral", "modFloral", "lowFloral", "wetland"))
-gynetracks.psf <- gynetracks.psf %>% left_join(landClasses) %>% select(-landtype) %>% rename(landtype = landTypeNew)
+gynetracks.psf <- gynetracks.psf %>% left_join(landClasses) %>% dplyr::select(-landtype) %>% rename(landtype = landTypeNew)
 
 gynetracks.psf<- gynetracks.psf %>% 
   filter(!is.na(behav)) %>% 
   mutate(ARS = ifelse(behav == "ARS", 1, 0),
-         Rest = ifelse(behav == "Rest", 1, 0),
-         Explore = ifelse(behav=="explore", 1, 0))
+         Rest = ifelse(behav == "Rest", 1, 0))
+
 
 #adding treatcode column
 gynetracks.psf2 <- gynetracks.psf %>% 
@@ -756,3 +756,112 @@ car::Anova(s4, type = 3)
 library(emmeans)
 s4.a <-emmeans(s4, pairwise ~ treatcode * landtype *daytime, data=gynetracks.psf2)
 s4.b <- data.frame(s4.a$contrasts) %>% filter(p.value < 0.05)
+
+# step length x landcover plot
+
+se <- function(x) sd(x, na.rm =T) / sqrt(length(x[!is.na(x)]))
+stepplotdat <-gynetracks.psf2 %>% group_by (landtype) %>% 
+  summarize (avgStep = mean(step, na.rm=T), errorstep = se(step))
+
+library(ggplot2)
+ggplot(data=stepplotdat, aes(x=landtype, y=avgStep)) +
+  theme_classic() +
+  geom_bar(stat="identity", fill="#858786") +
+  geom_errorbar(aes(x = landtype, ymin = avgStep - errorstep+1, ymax = avgStep + errorstep+1), 
+                width = 0) +
+  theme(axis.title.x=element_blank(), axis.text.x=element_text(size = 14)) +
+  theme(axis.title.y=element_text(size=14), axis.text.y=element_text(size=12)) +
+  scale_y_continuous(name= "average step length") +
+  scale_x_discrete(limits=c("agriculture", "forest", "lowFloral", "modFloral", "highFloral"),
+                   labels=c("agriculture", "forest", "low floral", "moderate floral", "high floral"))
+#### Turning angle
+#is there a difference between treatments for turning angle
+library(car)
+
+t1 <- lm(angle~treatcode, data=gynetracks.psf2)
+car::Anova(t1, type =2) #not significant
+
+# is there a difference between treatments x time period for turning angles
+
+t2 <- lm (angle ~ treatcode * daytime, data = gynetracks.psf2)
+car::Anova(t2, type = 3)
+
+#turning angle x treatment x land cover
+
+t3 <- lm (angle ~ treatcode * landtype, data= gynetracks.psf2)
+car::Anova(t3, type = 3)
+library(emmeans)
+t3.a <-emmeans(t3, pairwise ~ treatcode * landtype, data=gynetracks.psf2)
+t3.b <- data.frame(t3.a$contrasts) %>% filter(p.value < 0.05)
+t3.c <-emmeans(t3, pairwise ~ landtype, data = gynetracks.psf2)
+
+#turning angle x treatment x land cover x time period
+
+t4<- lm (angle ~ treatcode * landtype * daytime, data= gynetracks.psf2)
+car::Anova(t4, type = 3)
+library(emmeans)
+t4.a <-emmeans(t4, pairwise ~ treatcode * landtype *da, data=gynetracks.psf2)
+t4.b <- data.frame(t4.a$contrasts) %>% filter(p.value < 0.05)
+
+### behaviour as a response variable  ###
+
+b1<-glm(ARS ~ treatcode, family="binomial", data=gynetracks.psf2) 
+anova(b1, test="Chisq") #significant
+b1.a<- emmeans(b1, pairwise ~treatcode, data=gynetracks.psf2)
+
+b2<-glm(ARS~treatcode*daytime, family="binomial", data=gynetracks.psf2)
+anova(b2, test="Chisq") #significant
+b2.a<-emmeans(b2, pairwise~treatcode *daytime, data=gynetracks.psf2)
+
+b3<- glm(ARS~treatcode * landtype, family="binomial", data=gynetracks.psf2)
+anova(b3, test="Chisq")  #significant
+b3.a<-emmeans(b3, pairwise~treatcode *landtype, data=gynetracks.psf2)
+
+b4<-glm(ARS~treatcode * landtype * daytime, family="binomial", data=gynetracks.psf2)
+anova(b4, test="Chisq") #significant
+
+
+b5<-glm(Rest~treatcode, family="binomial", data=gynetracks.psf2)
+anova(b5, test="Chisq")
+# significant
+
+b6<-glm(Rest~treatcode*landtype, family="binomial", data=gynetracks.psf2)
+anova(b6, test="Chisq")
+b6.a<-emmeans(b6, pairwise~treatcode*landtype, data=gynetracks.psf2)
+
+b7 <- glm(Rest~treatcode * daytime, family = "binomial", data=gynetracks.psf2)
+anova(b7, test="Chisq") #not significant
+
+b8 <- glm(Rest ~treatcode*landtype*daytime, family = "binomial", data=gynetracks.psf2)
+anova(b8, test = "Chisq") #three way interaction not significant 
+
+se <- function(x) sd(x, na.rm =T) / sqrt(length(x[!is.na(x)]))
+
+aggtab <- gynetracks.psf2[,c("treatcode", "behav")]
+behavPlot<-aggtab %>% 
+  group_by(treatcode) %>% 
+  mutate(isRest = behav=="Rest", isARS = behav=="ARS") %>% 
+  summarize(rest = sum(isRest)/length(isRest), ARS = sum(isARS)/length(isARS)) %>% 
+  tidyr::gather(behav, prop, 2:3) %>% 
+  mutate(prop = round(prop,4))
+
+
+
+ggplot(behavPlot, aes(x=treatcode, y=prop, fill=behav)) +
+  geom_bar (stat="identity", position = position_dodge()) +
+  theme_classic () +
+  scale_fill_manual(values = c("#BF4E30", "#3AB795")) 
+
+
+ggplot(behavPlot, aes(x= landtype, y = value, fill=behav)) + theme_classic() + 
+  facet_grid(daytime ~ behav)+ geom_bar(stat = "identity") +
+  scale_fill_manual(values = c("#858786", "#858786")) +
+  scale_x_discrete(name="", limits=c("agriculture", "forest", "highFloral", "modFloral", "lowFloral"),
+                   labels=c("agriculture", "forest", "high floral", "moderate floral", "low floral")) +
+  scale_y_continuous(name="proportion of behaviour") +
+  theme(strip.text.x = element_text(size=12),
+        strip.text.y = element_text(size=12),
+        axis.text.x = element_text(size=12),
+        axis.title.y  = element_text(size=14)) +
+  guides(fill=FALSE)
+
