@@ -845,23 +845,112 @@ behavPlot<-aggtab %>%
   tidyr::gather(behav, prop, 2:3) %>% 
   mutate(prop = round(prop,4))
 
-
-
 ggplot(behavPlot, aes(x=treatcode, y=prop, fill=behav)) +
   geom_bar (stat="identity", position = position_dodge()) +
   theme_classic () +
-  scale_fill_manual(values = c("#BF4E30", "#3AB795")) 
+  scale_fill_manual(values = c("#59C9A5", "#1C3144"), name = "behaviour") +
+  scale_x_discrete(name="", labels = c("control", "cyantraniliprole")) +
+  scale_y_continuous(name = "proportion of behaviour") +
+  theme (axis.text.x = element_text(size=12),
+         axis.title.y  = element_text(size=14),
+         axis.text.y = element_text(size =12),
+         legend.title = element_text(size = 14),
+         legend.text = element_text(size =12))
 
+aggtab2 <- gynetracks.psf2[,c("treatcode", "behav", "landtype")]
+behavPlot2<-aggtab2 %>% 
+  group_by(treatcode, landtype) %>% 
+  mutate(isRest = behav=="Rest", isARS = behav=="ARS") %>% 
+  summarize(rest = sum(isRest)/length(isRest), ARS = sum(isARS)/length(isARS)) %>% 
+  tidyr::gather(behav, prop, 3:4) %>% 
+  mutate(prop = round(prop,4))
 
-ggplot(behavPlot, aes(x= landtype, y = value, fill=behav)) + theme_classic() + 
-  facet_grid(daytime ~ behav)+ geom_bar(stat = "identity") +
-  scale_fill_manual(values = c("#858786", "#858786")) +
+labels <- c(CTL = "control", CYN = "cyantraniliprole")
+ggplot(behavPlot2, aes(x= landtype, y = prop, fill=behav)) + theme_classic() + 
+  facet_grid(treatcode ~ ., labeller = labeller(treatcode = labels)) + 
+  geom_bar(stat = "identity", position = position_dodge()) +
+  scale_fill_manual(values = c("#59C9A5", "#1C3144"), name = "behaviour") +
   scale_x_discrete(name="", limits=c("agriculture", "forest", "highFloral", "modFloral", "lowFloral"),
                    labels=c("agriculture", "forest", "high floral", "moderate floral", "low floral")) +
   scale_y_continuous(name="proportion of behaviour") +
-  theme(strip.text.x = element_text(size=12),
-        strip.text.y = element_text(size=12),
+  theme(strip.text.y = element_text(size=12),
         axis.text.x = element_text(size=12),
-        axis.title.y  = element_text(size=14)) +
-  guides(fill=FALSE)
+        axis.title.y  = element_text(size=14),
+        legend.title = element_text(size = 14),
+        legend.text = element_text(size =12))
+
+###########################
+### Kernel Density  #######
+#############################
+
+library(tidyr)
+library(MASS)
+library(raster)
+library (ggplot2)
+library(dplyr)
+
+#landcover2 <- aggregate(landcover, fact=5, fun = modal) #reduce the resolution to increase speed
+control <- subset(gynetracks.psf2, treatcode=="CTL")
+cyan <- subset(gynetracks.psf2, treatcode == "CYN")
+control.kd<-kde2d(x=control$x, control$y)
+cyan.kd<-kde2d(x=cyan$x, y=cyan$y)
+control.kdr<-raster(control.kd)
+cyan.kdr <- raster(cyan.kd)
+
+
+#need to change crs for plotting with leaflette
+
+crs(control.kdr) <-crs(landcover)
+control.kdr.p<-projectRaster(control.kdr, crs=crs(gyne.mcp.t))
+
+
+library(leaflet)
+library(colorspace)
+
+#set up colour palette
+cPal<-sequential_hcl(6, palette = "OrYel", rev=TRUE)
+cval = c(0,seq(0, maxValue(kdr.p), by = maxValue(kdr.p)/5))
+cval = cval *100000 #numbers were very small, added this to clean up the legend
+cval <- round(cval, 2)
+cpal = c("#FFFFFF00", cPal)
+
+leaflet() %>% addProviderTiles('Esri.WorldImagery') %>% 
+  setView(-80.352, 43.377, zoom = 16) %>% 
+  addRasterImage(kdr.p, colors = cpal, opacity = 0.85) %>% 
+  addLegend(colors=cpal[-c(1,2)], labels = cval[-c(1,2)])
+
+#extracting landcover variables
+landcoverPoly <- rasterToPoints(landcover2)
+landpoint<-as.data.frame(landcoverPoly)
+coordinates(landpoint)<- ~x + y
+proj4string(landpoint)<-crs(landcover2)
+
+gynevalues <- raster::extract(kdr.p, landpoint)
+gyneex<-cbind(gynevalues, data.frame(landpoint))
+
+gyneex$landcoverRaster <-factor(gyneex$landcoverRaster)
+
+newgyne <- gyneex %>% filter(!(landcoverRaster %in% c(7,8)))
+
+se <- function(x) sd(x, na.rm =T) / sqrt(length(x[!is.na(x)]))
+
+summarizedLandcover <- newgyne %>% 
+  group_by(landcoverRaster) %>% 
+  summarize(meanGyne = mean(gynevalues *10000, na.rm = T), errorval = se(gynevalues *10000))
+
+ggplot(summarizedLandcover, aes(x = landcoverRaster, y = meanGyne)) + 
+  geom_bar(stat = "identity", fill ="#858786") +
+  geom_errorbar(aes(x = landcoverRaster, ymin = meanGyne - errorval, ymax = meanGyne + errorval), 
+                width = 0) +
+  theme_classic() +
+  scale_x_discrete(limits=c("1", "2", "3", "4", "6", "5", "9"),
+                   labels=c("agriculture", "developed", "forest", "high floral",  "moderate floral", "low floral",
+                            "wetland"), name="") +
+  theme(axis.text.x = element_text (size = 12),
+        axis.title.y = element_text(size = 14)) +
+  scale_y_continuous(name="mean kernel density") 
+
+kd1<- lm(gynevalues ~ as.factor(landcoverRaster), data=newgyne)
+car::Anova(kd1, type=2)
+emmeans(kd1, pairwise~as.factor(landcoverRaster), data=newgyne)
 
