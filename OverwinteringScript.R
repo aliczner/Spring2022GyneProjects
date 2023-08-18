@@ -980,34 +980,34 @@ k4postSig <- data.frame(kd4.a$contrasts) %>% filter(p.value < 0.05)
 write.csv(k4postSig, "k4Post.csv", row.names= F)
 
 
-
-
-
-gyneex$landcoverRaster <-factor(gyneex$landcoverRaster)
-
-newgyne <- gyneex %>% filter(!(landcoverRaster %in% c(7,8)))
+##plotting results of 3 way interaction
 
 se <- function(x) sd(x, na.rm =T) / sqrt(length(x[!is.na(x)]))
 
-summarizedLandcover <- newgyne %>% 
-  group_by(landcoverRaster) %>% 
-  summarize(meanGyne = mean(gynevalues *10000, na.rm = T), errorval = se(gynevalues *10000))
+kdplotdat <-kd.data4 %>% 
+  group_by(SpringLandcoverRaster, treatment, daytime) %>% 
+  summarize(meanKD = mean(kdensity*1000, na.rm=T), 
+            errorval = se(kdensity*1000))
 
-ggplot(summarizedLandcover, aes(x = landcoverRaster, y = meanGyne)) + 
+Timelabels <- c(Dayvalues = "day", Nightvalues = "night")
+Treatlabels <- c(control = "control", cyan = "cyantraniliprole")
+
+ggplot(kdplotdat, aes(x = SpringLandcoverRaster, y = meanKD)) + 
   geom_bar(stat = "identity", fill ="#858786") +
-  geom_errorbar(aes(x = landcoverRaster, ymin = meanGyne - errorval, ymax = meanGyne + errorval), 
-                width = 0) +
+  geom_errorbar(aes(x = SpringLandcoverRaster, ymin = meanKD - errorval, 
+                    ymax = meanKD + errorval), width = 0) +
   theme_classic() +
-  scale_x_discrete(limits=c("1", "2", "3", "4", "6", "5", "9"),
-                   labels=c("agriculture", "developed", "forest", "high floral",  "moderate floral", "low floral",
+  facet_grid(treatment ~ daytime, labeller = labeller (daytime = Timelabels,
+                                                       treatment = Treatlabels)) +
+  scale_x_discrete(limits=c("1", "2", "4", "3", "5", "6", "7"),
+                   labels=c("agriculture", "developed", "forest", "early\nfloral",  
+                            "late\nfloral", "low\nfloral",
                             "wetland"), name="") +
   theme(axis.text.x = element_text (size = 12),
-        axis.title.y = element_text(size = 14)) +
+        axis.title.y = element_text(size = 14),
+        strip.text.x = element_text(size=14),
+        strip.text.y = element_text(size=14)) +
   scale_y_continuous(name="mean kernel density") 
-
-kd1<- lm(gynevalues ~ as.factor(landcoverRaster), data=newgyne)
-car::Anova(kd1, type=2)
-emmeans(kd1, pairwise~as.factor(landcoverRaster), data=newgyne)
 
 
 
