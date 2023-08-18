@@ -890,43 +890,98 @@ library (ggplot2)
 library(dplyr)
 
 #landcover2 <- aggregate(landcover, fact=5, fun = modal) #reduce the resolution to increase speed
+landcover2 <- aggregate(landcover, fact=5, fun = modal)
 control <- subset(gynetracks.psf2, treatcode=="CTL")
+controlDay <-subset(control, daytime == "day")
+controlNight <- subset(control, daytime == "night")
 cyan <- subset(gynetracks.psf2, treatcode == "CYN")
+cyanDay <- subset(cyan, daytime == "day")
+cyanNight <-subset(cyan, daytime=="night")
+
 control.kd<-kde2d(x=control$x, control$y)
+controlDay.kd <- kde2d (x=controlDay$x, controlDay$y)
+controlNight.kd <-kde2d (x=controlNight$x, controlNight$y)
 cyan.kd<-kde2d(x=cyan$x, y=cyan$y)
+cyanDay.kd <- kde2d (x=cyanDay$x, cyanDay$y)
+cyanNight.kd <-kde2d (x=cyanNight$x, cyanNight$y)
+
 control.kdr<-raster(control.kd)
 cyan.kdr <- raster(cyan.kd)
+controlDay.kdr <- raster(controlDay.kd)
+controlNight.kdr <- raster(controlNight.kd)
+cyanDay.kdr <- raster(cyanDay.kd)
+cyanNight.kdr <- raster(cyanNight.kd)
 
-
-#need to change crs for plotting with leaflette
-
-crs(control.kdr) <-crs(landcover)
-control.kdr.p<-projectRaster(control.kdr, crs=crs(gyne.mcp.t))
-
-
-library(leaflet)
-library(colorspace)
-
-#set up colour palette
-cPal<-sequential_hcl(6, palette = "OrYel", rev=TRUE)
-cval = c(0,seq(0, maxValue(kdr.p), by = maxValue(kdr.p)/5))
-cval = cval *100000 #numbers were very small, added this to clean up the legend
-cval <- round(cval, 2)
-cpal = c("#FFFFFF00", cPal)
-
-leaflet() %>% addProviderTiles('Esri.WorldImagery') %>% 
-  setView(-80.352, 43.377, zoom = 16) %>% 
-  addRasterImage(kdr.p, colors = cpal, opacity = 0.85) %>% 
-  addLegend(colors=cpal[-c(1,2)], labels = cval[-c(1,2)])
 
 #extracting landcover variables
 landcoverPoly <- rasterToPoints(landcover2)
 landpoint<-as.data.frame(landcoverPoly)
 coordinates(landpoint)<- ~x + y
-proj4string(landpoint)<-crs(landcover2)
+proj4string(landpoint)<-crs(landcover)
 
-gynevalues <- raster::extract(kdr.p, landpoint)
-gyneex<-cbind(gynevalues, data.frame(landpoint))
+control.Totalvalues <- raster::extract(control.kdr, landpoint)
+control.Totalex<-cbind(control.Totalvalues, data.frame(landpoint))
+control.Dayvalues <-raster::extract(controlDay.kdr, landpoint)
+control.Dayex <- cbind(control.Dayvalues, data.frame(landpoint))
+control.Nightvalues <- raster::extract(controlNight.kdr, landpoint)
+control.Nightex <- cbind(control.Nightvalues, data.frame(landpoint))
+
+cyan.Totalvalues <- raster::extract(cyan.kdr, landpoint)
+cyan.Totalex<-cbind(cyan.Totalvalues, data.frame(landpoint))
+cyan.Dayvalues <-raster::extract(cyanDay.kdr, landpoint)
+cyan.Dayex <- cbind(cyan.Dayvalues, data.frame(landpoint))
+cyan.Nightvalues <- raster::extract(cyanNight.kdr, landpoint)
+cyan.Nightex <- cbind(cyan.Nightvalues, data.frame(landpoint))
+
+treatex <-cbind(control.Totalex, cyan.Totalvalues, control.Dayex, control.Nightex,
+               cyan.Dayex, cyan.Nightex)
+treatdata <-treatex %>%
+  tidyr::gather(treatment, kdensity, c("control.Totalvalues", "cyan.Totalvalues", 
+                                "control.Dayvalues", "control.Nightvalues",
+                                "cyan.Dayvalues", "cyan.Nightvalues"))
+treatdata2 <- treatdata[,c(1:3, ncol(treatdata), ncol(treatdata)-1)] 
+
+write.csv (treatdata2, "KernelDensityData.csv")
+
+##### STOPPING HERE WRITING THE DATA AS CSV TO CONTINUE LATER
+kd.data <- read.csv("KernelDensityData.csv")
+
+kd.data2 <- kd.data %>% 
+  tidyr::separate(treatment, into=c("treatment","daytime"), sep="[.]")
+
+kd.data3 <-subset(kd.data2, daytime=="Totalvalues") #any stats without daytime
+
+kd1<- lm(kdensity ~ treatment, data=kd.data3)
+car::Anova(kd1, type=2)
+emmeans(kd1, pairwise~treatment, data=kd.data3)
+
+kd2 <- lm(kdensity ~ treatment * as.factor(SpringLandcoverRaster),
+          data = kd.data3)
+car::Anova(kd2, type=2)
+kd2.a <- emmeans(kd2, pairwise~treatment * as.factor(SpringLandcoverRaster), 
+        data=kd.data3)
+k2postSig<- data.frame(kd2.a$contrasts) %>% filter(p.value < 0.05)
+write.csv(k2postSig, "k2Post.csv", row.names= F)
+
+kd.data4 <- subset(kd.data2, daytime!="Totalvalues") #use this for any daytime stats
+
+kd3 <- lm(kdensity ~ treatment* as.factor(SpringLandcoverRaster) * daytime, 
+          data = kd.data4)
+car::Anova(kd3, type=2)
+kd3.a <- emmeans(kd3, pairwise~treatment * as.factor(SpringLandcoverRaster) *daytime, 
+                 data=kd.data4)
+k3postSig <- data.frame(kd3.a$contrasts) %>% filter(p.value < 0.05)
+write.csv(k3postSig, "k3Post.csv", row.names= F)
+
+kd4 <- lm(kdensity ~ treatment* daytime, data = kd.data4)
+car::Anova(kd4, type=2)
+kd4.a <- emmeans(kd4, pairwise~treatment *daytime, data=kd.data4)
+k4postSig <- data.frame(kd4.a$contrasts) %>% filter(p.value < 0.05)
+write.csv(k4postSig, "k4Post.csv", row.names= F)
+
+
+
+
 
 gyneex$landcoverRaster <-factor(gyneex$landcoverRaster)
 
@@ -953,4 +1008,28 @@ ggplot(summarizedLandcover, aes(x = landcoverRaster, y = meanGyne)) +
 kd1<- lm(gynevalues ~ as.factor(landcoverRaster), data=newgyne)
 car::Anova(kd1, type=2)
 emmeans(kd1, pairwise~as.factor(landcoverRaster), data=newgyne)
+
+
+
+#need to change crs for plotting with leaflette
+
+crs(control.kdr) <-crs(landcover)
+control.kdr.p<-projectRaster(control.kdr, crs=crs(gyne.mcp.t))
+
+
+library(leaflet)
+library(colorspace)
+
+#set up colour palette
+cPal<-sequential_hcl(6, palette = "OrYel", rev=TRUE)
+cval = c(0,seq(0, maxValue(kdr.p), by = maxValue(kdr.p)/5))
+cval = cval *100000 #numbers were very small, added this to clean up the legend
+cval <- round(cval, 2)
+cpal = c("#FFFFFF00", cPal)
+
+leaflet() %>% addProviderTiles('Esri.WorldImagery') %>% 
+  setView(-80.352, 43.377, zoom = 16) %>% 
+  addRasterImage(kdr.p, colors = cpal, opacity = 0.85) %>% 
+  addLegend(colors=cpal[-c(1,2)], labels = cval[-c(1,2)])
+
 
