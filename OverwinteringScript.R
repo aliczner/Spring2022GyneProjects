@@ -1010,26 +1010,76 @@ ggplot(kdplotdat, aes(x = SpringLandcoverRaster, y = meanKD)) +
   scale_y_continuous(name="mean kernel density") 
 
 
-
 #need to change crs for plotting with leaflette
 
-crs(control.kdr) <-crs(landcover)
-control.kdr.p<-projectRaster(control.kdr, crs=crs(gyne.mcp.t))
+control.kdr<-raster(control.kd)
+cyan.kdr <- raster(cyan.kd)
+controlDay.kdr <- raster(controlDay.kd)
+controlNight.kdr <- raster(controlNight.kd)
+cyanDay.kdr <- raster(cyanDay.kd)
+cyanNight.kdr <- raster(cyanNight.kd)
 
+newproj <-"+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
+crs(controlDay.kdr) <-crs(landcover)
+crs(controlNight.kdr) <- crs(landcover)
+crs(cyanDay.kdr) <-crs(landcover)
+crs(cyanNight.kdr) <- crs(landcover)
+
+controlDay.kdr.p<-projectRaster(controlDay.kdr, crs=newproj)
+controlNight.kdr.p<-projectRaster(controlNight.kdr, crs=newproj)
+cyanDay.kdr.p<-projectRaster(cyanDay.kdr, crs=newproj)
+cyanNight.kdr.p<-projectRaster(cyanNight.kdr, crs=newproj)
 
 library(leaflet)
 library(colorspace)
 
-#set up colour palette
-cPal<-sequential_hcl(6, palette = "OrYel", rev=TRUE)
-cval = c(0,seq(0, maxValue(kdr.p), by = maxValue(kdr.p)/5))
+#set up colour palette for control
+cPal<-sequential_hcl(6, palette = "PuBu", rev=TRUE)
+cval = c(0,seq(0, maxValue(controlDay.kdr.p), by = maxValue(controlDay.kdr.p)/5))
+cval = cval *100000 #numbers were very small, added this to clean up the legend
+cval <- round(cval, 2)
+cpal = c("#FFFFFF00", cPal)
+
+#control day
+leaflet() %>% addProviderTiles('Esri.WorldImagery') %>% 
+  setView(-80.352, 43.377, zoom = 16) %>% 
+  addRasterImage(controlDay.kdr.p, colors = cpal, opacity = 0.60) %>% 
+  addLegend(colors=cpal[-c(1,2)], labels = cval[-c(1,2)],
+            title = "kernel density")
+#control night
+cPal<-sequential_hcl(6, palette = "PuBu", rev=TRUE)
+cval = c(0,seq(0, maxValue(controlNight.kdr.p), by = maxValue(controlNight.kdr.p)/5))
 cval = cval *100000 #numbers were very small, added this to clean up the legend
 cval <- round(cval, 2)
 cpal = c("#FFFFFF00", cPal)
 
 leaflet() %>% addProviderTiles('Esri.WorldImagery') %>% 
   setView(-80.352, 43.377, zoom = 16) %>% 
-  addRasterImage(kdr.p, colors = cpal, opacity = 0.85) %>% 
-  addLegend(colors=cpal[-c(1,2)], labels = cval[-c(1,2)])
+  addRasterImage(controlNight.kdr.p, colors = cpal, opacity = 0.60) %>% 
+  addLegend(colors=cpal[-c(1,2)], labels = cval[-c(1,2)],
+            title = "kernel density")
+#cyantraniliprole day
+cPal<-sequential_hcl(6, palette = "OrYel", rev=TRUE)
+cval = c(0,seq(0, maxValue(cyanDay.kdr.p), by = maxValue(cyanDay.kdr.p)/5))
+cval = cval *100000 #numbers were very small, added this to clean up the legend
+cval <- round(cval, 2)
+cpal = c("#FFFFFF00", cPal)
 
+leaflet() %>% addProviderTiles('Esri.WorldImagery') %>% 
+  setView(-80.352, 43.377, zoom = 16) %>% 
+  addRasterImage(cyanDay.kdr.p, colors = cpal, opacity = 0.60) %>% 
+  addLegend(colors=cpal[-c(1,2)], labels = cval[-c(1,2)],
+            title = "kernel density")
+#cyantraniliprole night
+cPal<-sequential_hcl(6, palette = "OrYel", rev=TRUE)
+cval = c(0,seq(0, maxValue(cyanNight.kdr.p), by = maxValue(cyanNight.kdr.p)/5))
+cval = cval *100000 #numbers were very small, added this to clean up the legend
+cval <- round(cval, 2)
+cpal = c("#FFFFFF00", cPal)
+
+leaflet() %>% addProviderTiles('Esri.WorldImagery') %>% 
+  setView(-80.352, 43.377, zoom = 16) %>% 
+  addRasterImage(cyanNight.kdr.p, colors = cpal, opacity = 0.60) %>% 
+  addLegend(colors=cpal[-c(1,2)], labels = cval[-c(1,2)],
+            title = "kernel density")
 
