@@ -1083,3 +1083,41 @@ leaflet() %>% addProviderTiles('Esri.WorldImagery') %>%
   addLegend(colors=cpal[-c(1,2)], labels = cval[-c(1,2)],
             title = "kernel density")
 
+####  Minimum Convex Polygon ####
+
+library(adehabitatHR)
+
+gynetracks.psf2 <- gynetracks.psf2[!is.na(gynetracks.psf2$x) 
+                               & !is.na(gynetracks.psf2$y),] #remove rows with NA
+gynept5 <- gynetracks.psf2 %>% 
+  group_by(id) %>%
+  mutate(nHits = length(id)) %>% 
+  filter(nHits > 5) #mcp function only works with at least 5 relocations 
+gynept5<-gynept5[, c("id", "x", "y")] #mcp needs only 3 columns
+coordinates(gynept5) <- ~x+y #specifying coordinates
+proj4string(gynept5) <-"+proj=lcc +lon_0=-90 +lat_1=33 +lat_2=45" #Lambert Conformal Conic
+
+gyne.mcp <- mcp(gynept5, percent = 100, unout = "km2")
+gyne.mcp
+names(gyne.mcp)[1]<-"AnimalID"
+gyne.mcpDF <- data.frame(gyne.mcp) #dataframe of mcp output with all data columns
+str(gyne.mcpDF)
+
+gyne.mcpDF2 <- gyne.mcpDF %>% 
+  mutate(Treatment = case_when(
+    startsWith(AnimalID, "CTL") ~ "control",
+    startsWith(AnimalID, "CYN") ~ "cyantraniliprole"))
+
+m1<-lm(area~Treatment, data=gyne.mcpDF2) #no difference
+summary(m1)
+anova(m1)
+
+gyne.mcpDF2  %>%
+  group_by(Treatment) %>%
+  summarise(
+    areaAvg = mean(area, na.rm = T),
+    sd = sd(area, na.rm=T),
+    n = sum(!is.na(area)),
+    se = sd / sqrt(n)
+  )
+
