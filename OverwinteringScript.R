@@ -889,21 +889,36 @@ library(raster)
 library (ggplot2)
 library(dplyr)
 
+tagsproj.df <-as.data.frame(tagsproj)
+
+tagsproj.df2 <- tagsproj.df %>% 
+  mutate(Treatment = case_when(
+    startsWith(AnimalID, "CTL") ~ "control",
+    startsWith(AnimalID, "CYN") ~ "cyantraniliprole"))
+
+#Separating dataset to make a daytime column
+tagsproj.df3 <- tidyr::separate(tagsproj.df2, GPStime, sep=":", 
+                                into=c("hour","minute","sec"))
+
+tagsproj.df3[,"daytime"] <- ifelse( as.numeric(tagsproj.df3$hour) < 5
+                           | as.numeric(tagsproj.df3$hour) > 20, "night", "day")
+
+
 #landcover2 <- aggregate(landcover, fact=5, fun = modal) #reduce the resolution to increase speed
 landcover2 <- aggregate(landcover, fact=5, fun = modal)
-control <- subset(gynetracks.psf2, treatcode=="CTL")
+control <- subset(tagsproj.df3 , Treatment=="control")
 controlDay <-subset(control, daytime == "day")
 controlNight <- subset(control, daytime == "night")
-cyan <- subset(gynetracks.psf2, treatcode == "CYN")
+cyan <- subset(tagsproj.df3, Treatment == "cyantraniliprole")
 cyanDay <- subset(cyan, daytime == "day")
 cyanNight <-subset(cyan, daytime=="night")
 
-control.kd<-kde2d(x=control$x, control$y)
-controlDay.kd <- kde2d (x=controlDay$x, controlDay$y)
-controlNight.kd <-kde2d (x=controlNight$x, controlNight$y)
-cyan.kd<-kde2d(x=cyan$x, y=cyan$y)
-cyanDay.kd <- kde2d (x=cyanDay$x, cyanDay$y)
-cyanNight.kd <-kde2d (x=cyanNight$x, cyanNight$y)
+control.kd<-kde2d(x=control$X, control$Y)
+controlDay.kd <- kde2d (x=controlDay$X, controlDay$Y)
+controlNight.kd <-kde2d (x=controlNight$X, controlNight$Y)
+cyan.kd<-kde2d(x=cyan$X, y=cyan$Y)
+cyanDay.kd <- kde2d (x=cyanDay$X, cyanDay$Y)
+cyanNight.kd <-kde2d (x=cyanNight$X, cyanNight$Y)
 
 control.kdr<-raster(control.kd)
 cyan.kdr <- raster(cyan.kd)
@@ -911,7 +926,6 @@ controlDay.kdr <- raster(controlDay.kd)
 controlNight.kdr <- raster(controlNight.kd)
 cyanDay.kdr <- raster(cyanDay.kd)
 cyanNight.kdr <- raster(cyanNight.kd)
-
 
 #extracting landcover variables
 landcoverPoly <- rasterToPoints(landcover2)
@@ -1087,14 +1101,14 @@ leaflet() %>% addProviderTiles('Esri.WorldImagery') %>%
 
 library(adehabitatHR)
 
-gynetracks.psf2 <- gynetracks.psf2[!is.na(gynetracks.psf2$x) 
-                               & !is.na(gynetracks.psf2$y),] #remove rows with NA
-gynept5 <- gynetracks.psf2 %>% 
-  group_by(id) %>%
-  mutate(nHits = length(id)) %>% 
+tagsproj.df3 <- tagsproj.df3[!is.na(tagsproj.df3$X) 
+                               & !is.na(tagsproj.df3$Y),] #remove rows with NA
+gynept5 <- tagsproj.df3 %>% 
+  group_by(AnimalID) %>%
+  mutate(nHits = length(AnimalID)) %>% 
   filter(nHits > 5) #mcp function only works with at least 5 relocations 
-gynept5<-gynept5[, c("id", "x", "y")] #mcp needs only 3 columns
-coordinates(gynept5) <- ~x+y #specifying coordinates
+gynept5<-gynept5[, c("AnimalID", "X", "Y")] #mcp needs only 3 columns
+coordinates(gynept5) <- ~X+Y #specifying coordinates
 proj4string(gynept5) <-"+proj=lcc +lon_0=-90 +lat_1=33 +lat_2=45" #Lambert Conformal Conic
 
 gyne.mcp <- mcp(gynept5, percent = 100, unout = "km2")
@@ -1120,4 +1134,131 @@ gyne.mcpDF2  %>%
     n = sum(!is.na(area)),
     se = sd / sqrt(n)
   )
+##########################################
+####  Last Detection Point  ####
+#############################################
 
+###calculating the number of days flying
+
+tagsproj.df3$GPSdate <- as.Date(tagsproj.df3$GPSdate, format = "%d_%m_%y")
+
+daysFlown <- tagsproj.df3  %>%
+  group_by(AnimalID) %>% 
+  summarise(firstDay = (min(GPSdate)), lastDay = (max(GPSdate))) %>% 
+  mutate(daysFlown = lastDay - firstDay)
+
+daysFlown.df<-data.frame(daysFlown)
+
+daysFlown.df2<- daysFlown.df %>% 
+  mutate(Treatment = case_when(
+    startsWith(AnimalID, "CTL") ~ "control",
+    startsWith(A, "CYN") ~ "cyantraniliprole"))
+
+daysFlown.df2  %>%
+  group_by(Treatment) %>%
+  summarise(
+    daysAvg = mean(daysFlown, na.rm = T),
+    sd = sd(daysFlown, na.rm=T),
+    n = sum(!is.na(daysFlown)),
+    se = sd / sqrt(n)
+  )
+
+write.csv (daysFlown.df2, "DaysFlownOverwintering.csv")
+#is there a difference in treatments between days flown?
+
+f1 <- glm(as.numeric(daysFlown) ~ Treatment, family = "poisson", 
+          data = daysFlown.df2)
+summary(f1) # overdispersed 
+library(AER)
+dispersiontest(f1) #overdispersed, trying again with negative binomial
+
+library(MASS)
+f1.b <- glm.nb(as.numeric(daysFlown) ~ Treatment,  
+            data = daysFlown.df2)
+summary(f1.b) #possibly still overdispersed 
+library(DHARMa) #AER only for poisson so trying this one
+simf1.b <- simulateResiduals(f1.b)
+testOverdispersion(simf1.b) # no longer overdispersed
+
+anova(f1.b, test = "Chisq")
+
+#extracting the last detection point
+
+tagsproj.df3$GPSdate <-as.POSIXct(as.character(paste(tagsproj.df3$GPSdate, paste(
+                                 tagsproj.df3$hour,
+                                 tagsproj.df3$min,
+                                tagsproj.df3$sec,
+                                sep=":"))), format="%Y-%m-%d %H:%M:%S")
+
+lastDay<-tagsproj.df3 %>% 
+  group_by(AnimalID) %>% 
+  slice(which.max(GPSdate))
+
+lastDay.sp<-lastDay
+coordinates(lastDay.sp)<-~X+Y
+proj4string(lastDay.sp) <- "+proj=lcc +lat_0=40 +lon_0=-96 +lat_1=50 +lat_2=70 +x_0=0 +y_0=0 +datum=NAD83 +units=m
++no_defs"
+
+lastDay.sp$landtype<- raster::extract(landcover, lastDay.sp)
+
+lastDay.df <- as.data.frame(lastDay.sp)
+
+library(ggplot2)
+
+#plot of landcover types associated with last occurrence point
+ggplot(data=lastDay.df, aes(x=as.character(landtype), fill=Treatment)) +
+  geom_bar(stat="count", position = position_dodge2(preserve="single")) +
+  scale_y_continuous(breaks=seq(0, 10, 2), name= "count of last occurrences") +
+  scale_x_discrete(limits=c("1", "3", "4", "5", "6"),
+                   labels=c("agriculture", "early floral", "forest", 
+                            "late floral", "low floral")) +
+  scale_fill_manual(values = c("#59C9A5", "#1C3144")) +
+  theme_classic() +
+  theme(axis.title.x=element_blank(), axis.text.x=element_text(size = 12)) +
+  theme(axis.title.y=element_text(size=14), axis.text.y=element_text(size=12)) 
+
+#making a map of where the last points are
+lastDay.sp<-lastDay
+coordinates(lastDay.sp)<-~X+Y
+proj4string(lastDay.sp) <- "+proj=lcc +lat_0=40 +lon_0=-96 +lat_1=50 +lat_2=70 +x_0=0 +y_0=0 +datum=NAD83 +units=m
++no_defs"
+lastDay.sp <- spTransform(lastDay.sp, "+init=epsg:4326 +proj=longlat +datum=WGS84 +no_defs +towgs84=0,0,0")
+
+set.seed(11) ## makes the plot repeatable
+randomAdjustment <- function(nObs, adjRange){
+  return(runif(nObs, -0.5, 0.5)/adjRange)
+}
+## Then run this
+lastDay.sp$xAdj <- lastDay.sp$X + randomAdjustment(23, 1000)
+lastDay.sp$yAdj <- lastDay.sp$Y + randomAdjustment(23, 1000)
+
+library(leaflet)
+
+treatpal <- colorFactor(palette= c("#59C9A5", "#1C3144"),
+                        levels = c("control", "cyantraniliprole"))
+
+leaflet(lastDay.sp) %>% addTiles() %>%
+  addProviderTiles('Esri.WorldImagery') %>%
+  setView(-80.352, 43.377, zoom = 16) %>%
+  addCircleMarkers(~xAdj, ~yAdj, stroke=FALSE, color = ~treatpal(Treatment),
+                   fillOpacity=0.9) %>%
+  addLegend("topright", pal = treatpal, values= ~Treatment, opacity=1)
+
+### making a land cover plot possibly for the paper
+landcover.df <- as.data.frame(landcover, xy=TRUE) %>% 
+  na.omit()
+
+landmap <-ggplot(data = landcover.df) +
+  geom_raster(aes(x=x, y=y, fill= as.factor(SpringLandcoverRaster))) +
+  theme_minimal() +
+  scale_fill_manual(breaks = c("1", "2", "3", "4", "5", "6", "7"),
+                      labels = c("agriculture", "developed", "early floral",
+                                 "forest", "late floral", "low floral", "wetland"),
+                      values = c("#FFE381", "#C0BCB5", "#827191", "#9BC53D",
+                                "#F194B4", "#EFCA08", "#00C2D1")) +
+  theme (legend.title = element_blank(),
+         axis.title.x = element_text(size =14),
+         axis.text.x = element_text(size = 12),
+         axis.title.y = element_text(size =14),
+         axis.text.y = element_text(size = 12))
+landmap
