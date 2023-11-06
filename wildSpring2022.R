@@ -612,11 +612,10 @@ library(sf)
 library(tidyverse)
 
 tracksout.sp <-tracks.out2
-coordinates(tracksout.sp) <-~x+y
-proj4string(tracksout.sp) <- "+proj=lcc +lat_0=40 +lon_0=-96 +lat_1=50 +lat_2=70 +x_0=0 +y_0=0 +datum=NAD83 +units=m
-+no_defs" 
+tracksout.sp <- st_as_sf(tracksout.sp, coords = c("x", "y"), crs="ESRI:102001")
 
-tracksRandom <- spsample(tracksout.sp, 486, "random")
+
+tracksRandom <- st_sample(perim, size=8876)
 
 rand_sl = random_numbers(make_exp_distr(), n = 1e+05)
 rand_ta = random_numbers(make_unif_distr(), n = 1e+05)
@@ -636,7 +635,7 @@ getRandomCoords <- function(df, N) { ## needs dataframe and number of random ste
   return(randomizedCoords)
   
 }
-randomCoords <- getRandomCoords(tracks.out2, 10) ## calculate all random points
+randomCoords <- getRandomCoords(tracks.out2, 1) ## calculate all random points
 plot(randomCoords$x2, randomCoords$y2)
 
 getTrueCoords <- function(df){ ## revise the true steps to match the same as random
@@ -652,24 +651,27 @@ trueCoords <- getTrueCoords(tracks.out2) ## revise data to get all true points
 gynetracks.tf <- rbind(randomCoords,trueCoords ) 
 
 #landcover raster needs to be a rasterstack
-landStack <- stack()
+library(terra)
+landStack <- rast()
 for(i in 1:7) { 
   tempRaster <- landcover
   tempRaster[tempRaster != i] <- 0
   tempRaster[tempRaster == i] <- 1
   names(tempRaster) <- paste0("landcover",i)
-  landStack <- stack(landStack, tempRaster)
+  landStack <- c(landStack, tempRaster)
 }
 
 #extract landcover data but first add treatcode
 gynetracks.tf <- gynetracks.tf %>% 
-  mutate(treatcode = substr(id, 0, 3))
+  mutate(treatcode = substr(id, 0, 1))
 
 gynetracks.tfs <- gynetracks.tf
-coordinates(gynetracks.tfs) <-~x2+y2
-proj4string(gynetracks.tfs) <- "+proj=lcc +lat_0=40 +lon_0=-96 +lat_1=50 +lat_2=70 +x_0=0 +y_0=0 +datum=NAD83 +units=m
-+no_defs" 
-landex<- raster::extract(landStack, gynetracks.tfs)
+gynetracks.tfs<- st_as_sf(gynetracks.tfs, coords = c("x2", "y2"), crs="ESRI:102001")
+
+# Convert 'gynetracks.tfs' to a SpatVector object to work with terra
+gynetracks.tfs <- vect(gynetracks.tfs)
+
+landex<- terra::extract(landStack, gynetracks.tfs)
 
 #add covariates from landStack to the dataframe for SSF
 gynetracks.tfs$agriculture <- landex[,1]
