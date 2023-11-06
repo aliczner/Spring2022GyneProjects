@@ -9,9 +9,6 @@ library(dplyr)
 data2<-data %>% #checking for duplications, no duplicates were found
   distinct() 
 
-write.csv(data, "wildSpring2022.csv")
-data<-read.csv("wildSpring2022.csv")
-
 #need to remove any points that are outside of the towers detection range
 towers<-read.csv("TowerActualLocations.csv")
 
@@ -94,7 +91,7 @@ tagsgdate<-tagsgdate %>% arrange(id, date)
 tagsNoNA <- tagsgdate %>% filter(!is.na(date))
 
 tags.sf <- st_as_sf(tagsNoNA, coords = c("x", "y"), crs = 4326)
-tags.pj <- st_transform(tags.sf, crs = 3347)
+tags.pj <- st_transform(tags.sf, crs="ESRI:102001")
 #here I just realized the geometry column at the end of tagsNoNA was the projected
 #coordinates, so should do this earlier
 tags.latlong <- st_coordinates(tags.pj)
@@ -141,7 +138,7 @@ tracks.big2 <- tracks.big %>% filter(dt < 2000 & dt > 1)
 #round time steps to specified interval
 hist(tracks.big2$dt, breaks=100)
 
-tracks<-round_track_time(dat=tracks, id="id", int=20, tol=500, time.zone="UTC", units="secs")
+tracks <-round_track_time(dat=tracks, id="id", int=20, tol=3600, time.zone="UTC", units="secs")
 
 #will break up the data into  rest and non-rest
 
@@ -152,10 +149,10 @@ tracks <- tracks %>%
 #now rest column where 1 = rest and 2 = non-rest
 
 # Create list from data frame where each element is a different track
-tracks.list<- df_to_list(dat = tracks, ind = "id")
+tracks.list <- df_to_list(dat = tracks, ind = "id")
 
 # Filter observations to time interval
-tracks_filt.list<- filter_time(dat.list = tracks.list, int = 20)
+tracks_filt.list <- filter_time(dat.list = tracks.list, int = 20)
 
 #### Discretize data streams (put into bins)
 
@@ -194,7 +191,7 @@ beesToDrop <- sapply(tracks.list2, function(x){
 })
 tracks.list3 <- tracks.list2[beesToDrop]
 
-tracks_disc.list3<-tracks_disc.list2 [beesToDrop]
+tracks_disc.list3 <-tracks_disc.list2[beesToDrop]
 
 # Pre-specify breakpoints based on 'rest'
 breaks<- purrr::map(tracks.list3, ~find_breaks(dat = ., ind = "rest"))
@@ -326,11 +323,11 @@ ggplot(behav.res, aes(x = bin, y = prop, fill = as.factor(behav))) +
   scale_x_continuous(breaks = 1:4) +
   facet_grid(behav ~ var, scales = "free_x")
 
-# behaviour 1 = resting: only rest,only zero step lengths, and straight turn angles
-# behaviour 2 = ARS: not resting med to large step lengths, many turn angles
+# behaviour 1 = ARS: not resting med to large step lengths, many turn angles
+# behaviour 2 = resting
 
 theta.estim.long <- expand_behavior(dat = tracks.seg, theta.estim = theta.estim, obs = obs,
-                                   nbehav = 2, behav.names = c("Rest", "ARS"),
+                                   nbehav = 2, behav.names = c("ARS", "Rest"),
                                    behav.order = c(1,2))
 
 # Plot results
@@ -354,7 +351,7 @@ ggplot(theta.estim.long) +
 tracks.out<- assign_behavior(dat.orig = tracks,
                              dat.seg.list = df_to_list(tracks.seg, "id"),
                              theta.estim.long = theta.estim.long,
-                             behav.names = c("Rest", "ARS"))
+                             behav.names = c("ARS", "Rest"))
 
 # Map dominant behavior for all IDs
 ggplot() +
@@ -437,14 +434,251 @@ ggplot() +
 ## Bees to drop is really be bees to keep. So we need the inverse
 beesToRevise <- names(beesToDrop)[! beesToDrop]
 
+head(tracks.list2)
+tracksAll <- do.call(rbind, tracks_disc.list2)
+
 ## Revise Rest == 1 for all observations
-tracks.outTemp <- tracks.out
-tracks.outTemp[tracks.outTemp$id %in% beesToRevise &   tracks.outTemp$rest == 1 & tracks.outTemp$dt == 250 &
-                 tracks.outTemp$angle > -1 & tracks.outTemp$angle < 1, "behav" ] <- "Rest"
-tracks.outTemp <- tracks.outTemp %>% filter(!is.na(behav))
+tracks.outTempRest <- tracksAll %>% 
+                  mutate(angle = ifelse(is.na(angle), 0, angle))
+
+tracks.outTempARS <- tracksAll %>% 
+  mutate(angle = ifelse(is.na(angle), 0, angle))
+tracks.outTempRest[tracks.outTempRest$id %in% beesToRevise &   
+                     tracks.outTempRest$rest == 1 & 
+                     tracks.outTempRest$dt == 20 &
+                     tracks.outTempRest$angle > -1 & tracks.outTempRest$angle < 1, "behav" ] <- "Rest"
+tracks.outTempRest <- tracks.outTempRest %>% 
+                filter(!is.na(behav)) %>% 
+                dplyr::select(-time1, -SL, -TA)
+
+tracks.outTempARS[!tracks.outTempARS$id %in% tracks.outTempRest$id, "behav" ] <- "ARS"
+tracks.outTempARS <- tracks.outTempARS %>% 
+  filter(!is.na(behav)) %>% 
+  dplyr::select(-time1, -SL, -TA)
 
 ## join processed dataset
 tracks.outWithMissing <- tracks.out %>% 
-  dplyr::select(names(tracks.outTemp)) %>% 
-  rbind(tracks.outTemp)  
+  dplyr::select(names(tracks.outTempRest)) %>% 
+  rbind(tracks.outTempRest)  %>% 
+  rbind(tracks.outTempARS)
 tracks.out2<-tracks.outWithMissing
+
+write.csv(tracks.out2, "tracksout2wild.csv")
+
+#################################################
+#####         Flight Paths         ##################
+#####################################################
+
+library(ggplot2)
+library(leaflet)
+library(shiny)
+library(dplyr)
+library(htmltools)
+
+## set leaflet CRS
+UTMtoLatLon <- function(dfToConvert){
+  dfIn <- dfToConvert
+  coordinates(dfIn) <- ~x+y
+  proj4string(dfIn) <- "+proj=aea +lat_0=40 +lon_0=-96 +lat_1=50 +lat_2=70 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs +type=crs "
+  dfIntLatLon <- spTransform(dfIn, CRS("+proj=longlat +datum=WGS84"))
+  dfLatLon <- data.frame(dfIntLatLon)
+  return(dfLatLon)
+}
+
+## CSS code to style title in leaflet map
+tag.map.title <- htmltools::tags$style(HTML("
+  .leaflet-control.map-title { 
+    transform: translate(10%,20%);
+    position: fixed !important;
+    left: 70%;
+    bottom: 10%;
+    text-align: center;
+    padding-left: 10px; 
+    padding-right: 10px; 
+    background: rgba(255,255,255,0.75);
+    font-weight: bold;
+    font-size: 16px;
+  }
+"))
+
+i="CTL-02"
+j=2
+allIds <- unique(tracks.out2$id)
+for( i in allIds) {
+  beeSingular <- tracks.out2 %>% filter(id == i) %>% UTMtoLatLon(.) 
+  ## need to find out number of steps before second loop
+  ## maximum 65 frames for very long steps
+  nSteps <- ifelse(nrow(beeSingular) > 65, 65, nrow(beeSingular))
+  for( j in 2:nSteps) { ## need to start at 2 to have a line
+    beeStep<-beeSingular[1:j,]
+    
+    colorSelect <- colorRampPalette(c("blue","orange"))
+    beeStep$colour <- colorSelect(j)
+    
+    ## HTML code to add title - uses CSS styles from above
+    title <- htmltools::tags$div(
+      tag.map.title, HTML(paste0(beeStep[j, "date"]))
+    )  
+    
+    leafletMap <- leaflet() %>% addTiles() %>% 
+      addProviderTiles('Esri.WorldImagery') %>% 
+      setView(-80.352, 43.377, zoom = 16) %>% 
+      addControl(title, position = "topleft", className="map-title")
+    for(k in 1:nrow(beeStep)){
+      lineStart <- k
+      lineEnd <- k+1
+      leafletMap <- addPolylines(leafletMap, 
+                                 data = beeStep[lineStart:lineEnd,], 
+                                 lng = ~x, lat = ~y, color = ~colour)
+    }
+    leafletMap
+    
+    ## Make directory
+    beeDir <- paste0("./scratchwild/",i)
+    dir.create(beeDir, showWarnings = FALSE)
+    ## save file
+    mapview::mapshot(leafletMap, file = paste0(beeDir,"/", i, "_", j, ".png"))
+    print(paste0(i, "-", j)) ## prints iteration
+  }
+}
+
+## Need to rename all the pngs to have equal padding of numbers so
+## that smaller numbers dont come before biggers ones
+## e.g., 3 > 21
+allFiles <- list.files("scratchwild", recursive = T, full.names = T)
+listLengths <- strsplit(allFiles, "_")
+fileID <- do.call(rbind, listLengths)[,2]
+fileID_addZeros <- ifelse(nchar(fileID) == 5, paste0("00",fileID), 
+                          ifelse(nchar(fileID) == 6, paste0("0",fileID), fileID))
+renameFiles <- paste0(do.call(rbind, listLengths)[,1], "_",fileID_addZeros)
+file.rename(allFiles, renameFiles)
+
+## function to save as GIF
+makeGIFwithPNG <- function(directory, savePath, FPS) {
+  require(magick)
+  ## list file names and read in
+  imgs <- list.files(directory, full.names = TRUE)
+  maxImages <- ifelse(length(imgs) > 50, 50, length(imgs))
+  imgs <- imgs[1:maxImages] ## cap the max number of images
+  img_list <- lapply(imgs, image_read)
+  
+  ## join the images together
+  img_joined <- image_join(img_list)
+  
+  ## animate at 2 frames per second
+  img_animated <- image_animate(img_joined, fps = FPS)
+  
+  ## save to disk
+  image_write(image = img_animated,
+              path = savePath)
+}
+
+processedBeeMaps <- list.dirs("./scratchwild")[-1]
+for(k in 13:length(processedBeeMaps)){
+  makeGIFwithPNG(processedBeeMaps[k], paste0(processedBeeMaps[k], ".gif"), 2)
+  print(k)
+  print(Sys.time())
+}
+
+# Making flight paths for each bee
+library(leaflet)
+
+allIds <- unique(tracks.out2$id)
+for( i in allIds) {
+  beeSingular <- tracks.out2%>% filter(id == i)
+  beePlot <- ggplot(data = beeSingular, aes(x, y, color = date, label = date)) +
+    geom_path(size=0.7) +
+    geom_text() +
+    scale_color_distiller(palette = "Spectral")
+  labs(x = "Easting", y = "Northing") +
+    theme_bw() +
+    theme(axis.title = element_text(size = 16),
+          strip.text = element_text(size = 14, face = "bold"),
+          legend.text = element_text(size = 12),
+          legend.title = element_text(size = 14))
+  
+  beePlot
+  ggsave( paste0("flightpaths/",i,".pdf"), width = 11, height = 9)
+  print(i)
+}
+
+##############################################3
+#### adding landcover for stats ###############
+###########################################
+
+##to do stats with landcover need to add landcover data for true and random points
+library(amt)
+library(sf)
+library(tidyverse)
+
+tracksout.sp <-tracks.out2
+coordinates(tracksout.sp) <-~x+y
+proj4string(tracksout.sp) <- "+proj=lcc +lat_0=40 +lon_0=-96 +lat_1=50 +lat_2=70 +x_0=0 +y_0=0 +datum=NAD83 +units=m
++no_defs" 
+
+tracksRandom <- spsample(tracksout.sp, 486, "random")
+
+rand_sl = random_numbers(make_exp_distr(), n = 1e+05)
+rand_ta = random_numbers(make_unif_distr(), n = 1e+05)
+
+getRandomCoords <- function(df, N) { ## needs dataframe and number of random steps per observation
+  rand_sl =  random_numbers(fit_distr(df$step, "gamma"), N) ## set random steps based on dataframe
+  rand_ta = random_numbers(fit_distr(df$angle, "vonmises"), N) # set random angles based on dataframe
+  randomizedCoords <- data.frame() ## empty dataframe to fill with randomized points
+  for(i in 1:nrow(df) ){
+    x2 <- df[i,"x"] + (rand_sl * cos(rand_ta)) ## calculate change in x-coordinate based on origin, step, and angle
+    y2 <- df[i,"y"] + (rand_sl * sin(rand_ta)) ## calculate change in y-coordinate based on origin, step, and angle
+    tempDf <- data.frame(id = df[i, "id"], case = "random", ## create dataframe with original bee ID, change in points, and movement info
+                         x1= df[i,"x"], y1= df[i,"y"], x2, y2, 
+                         sl = rand_sl, ta = rand_ta)
+    randomizedCoords <- rbind(randomizedCoords, tempDf) ## output all randomizations per observation
+  }
+  return(randomizedCoords)
+  
+}
+randomCoords <- getRandomCoords(tracks.out2, 10) ## calculate all random points
+plot(randomCoords$x2, randomCoords$y2)
+
+getTrueCoords <- function(df){ ## revise the true steps to match the same as random
+  revisedCoordsDF <- df %>% 
+    group_by(id) %>%  ## select by bee identifier
+    mutate(x2 = lead(x), y2 = lead(y)) %>%  ## create a new column for the end travel point
+    filter(!is.na(x2)) %>%  ## drop all initial x-y that don't have an end point
+    mutate(case = "true") %>%  ## add a column to identify true
+    dplyr::select(case, x1 = x, y1 = y, x2, y2, sl = step, ta = angle) ## match same data structure
+  return(revisedCoordsDF)
+}
+trueCoords <- getTrueCoords(tracks.out2) ## revise data to get all true points
+gynetracks.tf <- rbind(randomCoords,trueCoords ) 
+
+#landcover raster needs to be a rasterstack
+landStack <- stack()
+for(i in 1:7) { 
+  tempRaster <- landcover
+  tempRaster[tempRaster != i] <- 0
+  tempRaster[tempRaster == i] <- 1
+  names(tempRaster) <- paste0("landcover",i)
+  landStack <- stack(landStack, tempRaster)
+}
+
+#extract landcover data but first add treatcode
+gynetracks.tf <- gynetracks.tf %>% 
+  mutate(treatcode = substr(id, 0, 3))
+
+gynetracks.tfs <- gynetracks.tf
+coordinates(gynetracks.tfs) <-~x2+y2
+proj4string(gynetracks.tfs) <- "+proj=lcc +lat_0=40 +lon_0=-96 +lat_1=50 +lat_2=70 +x_0=0 +y_0=0 +datum=NAD83 +units=m
++no_defs" 
+landex<- raster::extract(landStack, gynetracks.tfs)
+
+#add covariates from landStack to the dataframe for SSF
+gynetracks.tfs$agriculture <- landex[,1]
+gynetracks.tfs$developed <- landex[,2]
+gynetracks.tfs$forest <- landex[,3]
+gynetracks.tfs$highFloral <- landex[,4]
+gynetracks.tfs$lowFloral <- landex[,5]
+gynetracks.tfs$modFloral <- landex[,6]
+gynetracks.tfs$wetland<- landex[,7]
+head(gynetracks.tfs)
+
+gynetracks.tfs$presence <- ifelse(gynetracks.tfs$case == "random", FALSE, TRUE)
