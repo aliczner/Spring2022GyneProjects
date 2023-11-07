@@ -702,8 +702,8 @@ forageq <- subset(gynetracks.tfs.NONA, treatcode =="F")
 nestq <- subset(gynetracks.tfs.NONA, treatcode =="N")
 queenq <- subset(gynetracks.tfs.NONA, treatcode =="Q")
 
-SSF1 <- clogit(as.numeric(presence) ~ agriculture + developed + earlyFloral + forest
-               + lateFloral + lowFloral + wetland,
+SSF1 <- clogit(as.numeric(presence) ~ earlyFloral
+               + lateFloral + lowFloral,
                method="approximate", na.action="na.fail", 
                data=gynetracks.tfs.NONA)
 
@@ -712,8 +712,8 @@ SSF2<-clogit(as.numeric(presence) ~ agriculture + developed + earlyFloral + fore
              method="approximate", na.action="na.fail", 
              data=forageq)
 
-SSF3<-clogit(as.numeric(presence) ~ agriculture + developed + earlyFloral + forest
-             + lateFloral + lowFloral + wetland,
+SSF3<-clogit(as.numeric(presence) ~ earlyFloral
+             + lateFloral + lowFloral,
              method="approximate", na.action="na.fail", 
              data=nestq)
 
@@ -772,14 +772,21 @@ gynetracks.psf2 <- gynetracks.psf %>%
 
 library(pastecs)
 
-step.forg <- (subset(gynetracks.psf2, treatcode == "F"))
+step.queen <- subset(gynetracks.psf2, treatcode %in% c("F", "Q"))
+step.queen$treatcode[step.queen$treatcode == "Q"] <- "F"
+#there is only two queens with pollen so collapse into foraging
 step.nests <- (subset(gynetracks.psf2, treatcode == "N"))
-step.queen <- (subset(gynetracks.psf2, treatcode == "Q"))
 
-stat.desc(gynetracks.psf) 
-stat.desc(step.forg)
-stat.desc(step.nests)
+
+stat.desc(gynetracks.psf)
+stat.desc(abs(gynetracks.psf$angle))
 stat.desc(step.queen)
+stat.desc(abs(step.queen$angle))
+stat.desc(step.nests)
+stat.desc(abs(gynetracks.psf$angle))
+
+gynetracks.psf2$treatcode[gynetracks.psf2$treatcode == "Q"] <- "F"
+
 
 #is there a difference between treatments for step length
 library(car)
@@ -791,6 +798,9 @@ car::Anova(s1, type =2) #yes significant
 
 s2 <- lm (step ~ treatcode * daytime, data = gynetracks.psf2)
 car::Anova(s2, type = 3)
+library(emmeans)
+s2.a <-emmeans(s2, pairwise ~ treatcode *daytime, data=gynetracks.psf2)
+s2.b <- data.frame(s2.a$contrasts) %>% filter(p.value < 0.05)
 
 #step length x treatment x land cover
 
@@ -805,6 +815,16 @@ library(emmeans)
 s4.a <-emmeans(s4, pairwise ~ treatcode * landtype *daytime, data=gynetracks.psf2)
 s4.b <- data.frame(s4.a$contrasts) %>% filter(p.value < 0.05)
 
+##NEW likely do not have enough power for the three way interaction
+
+s5 <- lm(step ~ treatcode * landtype + daytime, data=gynetracks.psf2)
+#s5 <- lm(step ~ treatcode * landtype + daytime + 
+           #daytime:treatcode, data=gynetracks.psf2) not sure if I care about this
+car::Anova(s5, type = 3)
+s5.a <-emmeans(s5, pairwise ~ treatcode * landtype, data=gynetracks.psf2)
+s5.b <- data.frame(s5.a$contrasts) %>% filter(p.value < 0.05)
+
+
 # step length x landcover plot
 
 se <- function(x) sd(x, na.rm =T) / sqrt(length(x[!is.na(x)]))
@@ -814,20 +834,20 @@ stepplotdat <-gynetracks.psf2 %>% group_by (landtype) %>%
 library(ggplot2)
 ggplot(data=stepplotdat, aes(x=landtype, y=avgStep)) +
   theme_classic() +
-  geom_bar(stat="identity", fill="#858786") +
-  geom_errorbar(aes(x = landtype, ymin = avgStep - errorstep+1, ymax = avgStep + errorstep+1), 
+  geom_bar(stat="identity", fill="#292866") +
+  geom_errorbar(aes(x = landtype, ymin = avgStep - errorstep, ymax = avgStep + errorstep), 
                 width = 0) +
-  theme(axis.title.x=element_blank(), axis.text.x=element_text(size = 14)) +
-  theme(axis.title.y=element_text(size=14), axis.text.y=element_text(size=12)) +
-  scale_y_continuous(name= "average step length") +
-  scale_x_discrete(limits=c("agriculture", "forest", "lowFloral", "modFloral", "highFloral"),
-                   labels=c("agriculture", "forest", "low floral", "moderate floral", "high floral"))
+  theme(axis.title.x=element_blank(), axis.text.x=element_text(size = 16)) +
+  theme(axis.title.y=element_text(size=14), axis.text.y=element_text(size=14)) +
+  scale_y_continuous(name= "average step length (m)") +
+  scale_x_discrete(limits=c("earlyFloral", "lateFloral", "lowFloral"),
+                   labels=c("early floral", "late floral", "low floral"))
 #### Turning angle
 #is there a difference between treatments for turning angle
 library(car)
 
 t1 <- lm(angle~treatcode, data=gynetracks.psf2)
-car::Anova(t1, type =2) #not significant
+car::Anova(t1, type =2) #significant
 
 # is there a difference between treatments x time period for turning angles
 
@@ -850,6 +870,40 @@ car::Anova(t4, type = 3)
 library(emmeans)
 t4.a <-emmeans(t4, pairwise ~ treatcode * landtype *da, data=gynetracks.psf2)
 t4.b <- data.frame(t4.a$contrasts) %>% filter(p.value < 0.05)
+
+t5 <- lm(abs(angle) ~ treatcode * landtype + daytime, data=gynetracks.psf2)
+#s5 <- lm(step ~ treatcode * landtype + daytime + 
+#daytime:treatcode, data=gynetracks.psf2) not sure if I care about this
+car::Anova(t5, type = 3)
+t5.a <-emmeans(s5, pairwise ~ treatcode * landtype, data=gynetracks.psf2)
+t5.b <- data.frame(s5.a$contrasts) %>% filter(p.value < 0.05)
+
+se <- function(x) sd(x, na.rm =T) / sqrt(length(x[!is.na(x)]))
+turnplotdat <-gynetracks.psf2 %>% 
+  group_by (treatcode, landtype) %>%
+  summarize (avgTurn = mean(abs(angle), na.rm=T), errorturn = se(abs(angle)))
+
+zeroValueDF <- data.frame(treatcode = "N", landtype = "earlyFloral", avgTurn = 0, errorTurn = 0)
+turnplotdat2 <- rbind(turnplotdat, zeroValueDF)
+
+library(ggplot2)
+ggplot(data=turnplotdat2, aes(x=landtype, y=avgTurn, fill = treatcode)) +
+  theme_classic() +
+  geom_bar(stat="identity", position = "dodge") +
+  geom_errorbar(aes(x = landtype, ymin = avgTurn - errorturn, 
+                    ymax = avgTurn + errorturn), 
+                width = 0, position = position_dodge(0.9))  +
+  theme(axis.title.x=element_blank(), axis.text.x=element_text(size = 16)) +
+  theme(axis.title.y=element_text(size=14), axis.text.y=element_text(size=14)) +
+  theme(legend.title = element_blank()) +
+  theme(legend.text = element_text(size = 14))+
+  scale_y_continuous(name= "average turn angle") +
+  scale_x_discrete(limits=c("earlyFloral", "lateFloral", "lowFloral"),
+                   labels=c("early floral", "late floral", "low floral")) +
+  scale_fill_manual(values = c("#8070FE", "#0D3601"),
+                    labels=c("foraging", "nest-searching"))
+
+
 
 ### behaviour as a response variable  ###
 
