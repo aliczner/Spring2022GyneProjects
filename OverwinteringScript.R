@@ -1,4 +1,6 @@
 # overwintering queens (aka Sabrina's bees)
+library(sf)
+library(raster)
 
 #first need to separate out the right bees
 
@@ -11,7 +13,7 @@ data2<-data %>% #checking for duplications, no duplicates were found
 
 write.csv(data, "overwinteringSpring2022.csv")
 
-landcover<- st_read("Spring2022Landcover.shp")
+landcover <- st_read("Spring2022Landcover.shp")
 rasterDimX = round(extent(landcover)[2]-extent(landcover)[1], 0 ) ## Rows per raster
 rasterDimY = round(extent(landcover)[4]-extent(landcover)[3], 0)  ## columns per raster
 empty<-raster(nrows= rasterDimX,  ## create an empty raster with the number of rows based on extent
@@ -29,7 +31,7 @@ writeRaster(rastland2, "SpringLandcoverRaster.tif", overwrite=T)
 #need to remove any points that are outside of the towers detection range
 towers<-read.csv("TowerActualLocations.csv")
 
-landcover<-raster("SpringLandcoverRaster.tif") #Rare landcover
+landcover <-raster("SpringLandcoverRaster.tif") #Rare landcover
 
 coordinates(towers)<-~X+Y
 proj4string(towers) <- "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
@@ -79,8 +81,6 @@ nums %>%
 
 library(bayesmove)
 
-######  Pre-specifying Breakpoints and Dealing with Zero-inflated Variables ####
-
 #date is in the wrong format
 
 library(lubridate)
@@ -105,7 +105,8 @@ names(tagsgdate)[4] <- "id"
 tagsgdate<-tagsgdate %>% arrange(id, date)
 
 ### calculating step length, turning angle and time interval
-tracks <-prep_data(dat=tagsgdate %>% filter(id != "CTL-20"), coord.names=c("x","y"), id="id") #CTL-20 
+tracks <-prep_data(dat=tagsgdate %>% filter(id != "CTL-20"), 
+                   coord.names=c("x","y"), id="id") #CTL-20 
 #was only observed once so it cannot make a track, removing to continue the code.
 
 head(tracks)
@@ -113,33 +114,14 @@ unique (tracks$id) #22 unique track ids
 
 library(ggplot2)
 
-ggplot() +
-  geom_path(data = tracks, aes(x, y, color = id, group = id), size=0.75) +
-  geom_point(data = tracks %>%
-               group_by(id) %>%
-               slice(which(row_number() == 1)) %>%
-               ungroup(), aes(x, y), color = "green", pch = 21, size = 3, stroke = 1.25) +
-  geom_point(data = tracks %>%
-               group_by(id) %>%
-               slice(which(row_number() == n())) %>%
-               ungroup(), aes(x, y), color = "red", pch = 24, size = 3, stroke = 1.25) +
-  scale_color_viridis_d("id", na.value = "grey50") +
-  labs(x = "Easting", y = "Northing") +
-  theme_bw() +
-  theme(axis.title = element_text(size = 16),
-        strip.text = element_text(size = 14, face = "bold"),
-        legend.text = element_text(size = 12),
-        legend.title = element_text(size = 14))
-
-
 boxplot(log10(tracks$dt))
-tracks.big <- tracks %>% filter(dt < 10000 & dt > 1)
+tracks.big <- tracks %>% filter(dt < 9000 & dt > 1)
 
 #round time steps to specified interval
-hist(tracks.big$dt, breaks=200)
-axis(side=1, at=seq(50, 4000, 50)) 
+hist(tracks.big$dt)
 
-tracks<-round_track_time(dat=tracks, id="id", int=500, tol=3600, time.zone="UTC", units="secs")
+tracks <-round_track_time(dat=tracks, id="id", int=2000, tol=3600, time.zone="UTC", units="secs")
+tracks[is.na(tracks)] <- 0
 
 #will break up the data into  rest and non-rest
 
@@ -150,52 +132,42 @@ tracks <- tracks %>%
 #now rest column where 1 = rest and 2 = non-rest
 
 # Create list from data frame where each element is a different track
-tracks.list<- df_to_list(dat = tracks, ind = "id")
+tracks.list <- df_to_list(dat = tracks, ind = "id")
 
 # Filter observations to time interval
-tracks_filt.list<- filter_time(dat.list = tracks.list, int = 500)
+tracks_filt.list <- filter_time(dat.list = tracks.list, int = 2000)
+
 
 #### Discretize data streams (put into bins)
 
-angle.bin.lims=seq(from=-pi, to=pi, by=pi/4)
+angle.bin.lims=round(seq(from=-pi, to=pi, by=pi/4), digits = 3)
 angle.bin.lims
 
-dist.bin.lims=quantile(tracks[tracks$dt==500,]$step,
-                       c(0, 0.5, 0.75, 0.8, 0.85, 0.9, 0.95, 0.99, 1.0), na.rm=T) 
+dist.bin.lims=quantile(tracks[tracks$dt==2000,]$step,
+                       c(0.75, 0.8, 0.85, 0.9, 0.95, 1), na.rm=T) 
 dist.bin.lims
 
 library(tidyverse)
 library(purrr)
 # Assign bins to observations
-tracks_disc.list<- map(tracks_filt.list,
+tracks_disc.list <- map(tracks_filt.list,
                        discrete_move_var,
                        lims = list(dist.bin.lims, angle.bin.lims),
                        varIn = c("step", "angle"),
                        varOut = c("SL", "TA"))
-# Since 0s get lumped into bin 1 for SL, need to add a 8th bin to store only 0s
-tracks_disc.list2 <- tracks_disc.list %>%
-  map(., ~mutate(.x, SL = SL + 1)) %>%  #to shift bins over
-  map(., ~mutate(.x, SL = case_when(step == 0 ~ 1,  #assign 0s to bin 1
-                                    step != 0 ~ SL)  #otherwise keep the modified SL bin
-  ))
-
-##pre-specify breakpoints
 
 # Only retain id, discretized step length (SL), turning angle (TA), and rest columns
-tracks.list2<- map(tracks_disc.list2,
+tracks.list2 <- map(tracks_disc.list,
                    subset,
-                   select = c(id, SL, TA, rest))
+                   select = c(id, SL, TA))
 
 ## Drop bees without non-rest state (i.e., no "2"s)
-beesToDrop <- sapply(tracks.list2, function(x){
-  ifelse(sum(x$rest) == nrow(x) *2 || sum(x$rest) == nrow(x), FALSE, TRUE)
-})
-tracks.list3 <- tracks.list2[beesToDrop]
+#beesToDrop <- sapply(tracks.list2, function(x){
+# ifelse(sum(x$rest) == nrow(x) *2 || sum(x$rest) == nrow(x), FALSE, TRUE)
+#})
+#tracks.list3 <- tracks.list2[beesToDrop]
 
-tracks_disc.list3<-tracks_disc.list2 [beesToDrop]
-
-# Pre-specify breakpoints based on 'rest'
-breaks<- purrr::map(tracks.list3, ~find_breaks(dat = ., ind = "rest"))
+#tracks_disc.list3<-tracks_disc.list2 [beesToDrop]
 
 ### run the segmentation model
 
@@ -208,25 +180,19 @@ alpha<- 1
 ngibbs<- 10000
 
 # Set the number of bins used to discretize each data stream
-nbins<- c(8,8,2)  #SL, TA, rest (in the order from left to right in tracks.list2)
+nbins<- c(5,8)  #SL, TA (in the order from left to right in tracks.list2)
 
 progressr::handlers(progressr::handler_progress(clear = FALSE))
-future::plan(future::multisession, workers = 3)  #run all MCMC chains in parallel
+future::plan(future::multisession, workers = 4)  #run all MCMC chains in parallel
 #refer to future::plan() for more details
 
-dat.res<- segment_behavior(data = tracks.list3, ngibbs = ngibbs, nbins = nbins,
-                           alpha = alpha, breakpt = breaks)
+dat.res<- segment_behavior(data = tracks.list2, ngibbs = ngibbs, nbins = nbins,
+                           alpha = alpha)
 
 future::plan(future::sequential)  #return to single core
 
-# Trace-plots for the number of breakpoints per ID
-traceplot(data = dat.res, type = "nbrks")
-
-# Trace-plots for the log marginal likelihood (LML) per ID
-traceplot(data = dat.res, type = "LML")
-
 ## Determine MAP for selecting breakpoints (maximum a posteriori)
-MAP.est<- get_MAP(dat = dat.res$LML, nburn = 5000)
+MAP.est <- get_MAP(dat = dat.res$LML, nburn = 5000)
 MAP.est
 
 brkpts<- get_breakpts(dat = dat.res$brkpts, MAP.est = MAP.est)
@@ -234,17 +200,14 @@ brkpts<- get_breakpts(dat = dat.res$brkpts, MAP.est = MAP.est)
 # How many breakpoints estimated per ID?
 apply(brkpts[,-1], 1, function(x) length(purrr::discard(x, is.na)))
 
-plot_breakpoints(data = tracks_disc.list2, as_date = FALSE, var_names = c("step","angle","rest"),
-                 var_labels = c("Step Length (km)", "Turning Angle (rad)", "Resting"), brkpts = brkpts)
-
-tracks.seg<- assign_tseg(dat = tracks_disc.list3, brkpts = brkpts)
+tracks.seg<- assign_tseg(dat = tracks_disc.list, brkpts = brkpts)
 head(tracks.seg)
 
 # Select only id, tseg, SL, TA, and rest columns
-tracks.seg2<- tracks.seg[,c("id","tseg","SL","TA","rest")]
+tracks.seg2<- tracks.seg[,c("id","tseg","SL","TA")]
 
 # Summarize observations by track segment
-nbins<- c(8,8,2)
+nbins<- c(5,8)
 obs<- summarize_tsegs(dat = tracks.seg2, nbins = nbins)
 head(obs)
 
@@ -253,7 +216,7 @@ head(obs)
 set.seed(1)
 
 # Prepare for Gibbs sampler
-ngibbs <- 20000  #number of MCMC iterations for Gibbs sampler
+ngibbs <- 25000  #number of MCMC iterations for Gibbs sampler
 nburn <- ngibbs/2  #number of iterations for burn-in
 nmaxclust <- max(nbins) - 1  #one fewer than max number of bins used for data streams
 ndata.types <- length(nbins)  #number of data types
@@ -267,19 +230,19 @@ res <- cluster_segments(dat=obs, gamma1=gamma1, alpha=alpha,
                         ngibbs=ngibbs, nmaxclust=nmaxclust,
                         nburn=nburn, ndata.types=ndata.types)
 
-plot(res$loglikel, type='l', xlab = "Iteration", ylab = "Log Likelihood")
 
 ### Determine the number of likely behaviour states
 
 # Extract proportions of behaviors per track segment
-theta.estim <- extract_prop(res = res, ngibbs = ngibbs, nburn = nburn, nmaxclust = nmaxclust)
+theta.estim <- extract_prop(res = res, ngibbs = ngibbs, nburn = nburn, 
+                            nmaxclust = nmaxclust)
 
 # Calculate mean proportions per behaviour
 (theta.means<- round(colMeans(theta.estim), digits = 3))
 
 # Calculate cumulative sum
 cumsum(theta.means)
-#first 2 states comprise 98% of all observations
+#first 2 states comprise 99% of all observations
 
 # Convert to data frame for ggplot2
 theta.estim_df<- theta.estim %>%
@@ -298,7 +261,7 @@ ggplot(theta.estim_df, aes(behaviour, prop)) +
   theme(panel.grid = element_blank(),
         axis.title = element_text(size = 16),
         axis.text = element_text(size = 14))
-#most are in the first two behaviour states, a little bit in 3
+#most are in the first two behaviour states
 
 #### Classify the states as behaviours
 
@@ -322,28 +285,15 @@ ggplot(behav.res, aes(x = bin, y = prop, fill = as.factor(behav))) +
   scale_x_continuous(breaks = 1:8) +
   facet_grid(behav ~ var, scales = "free_x")
 
-#first behaviour: mainly not resting, some resting. Some zero step length and many at max step length
-# all turning angles except directly straight, foraging or area-restricted search
-#Second behaviour: Only resting. No step length, facing straight
+#first behaviour: mainly resting. Some greater step lengths
+# mainly straight but some at the extremes
+# could be resting with some foraging or nest searching?
+#Second behaviour: Only moving. largest step lengths tortuous movement
+#transit
 
-theta.estim.long<- expand_behavior(dat = tracks.seg, theta.estim = theta.estim, obs = obs,
+theta.estim.long <- expand_behavior(dat = tracks.seg, theta.estim = theta.estim, obs = obs,
                                    nbehav = 2, behav.names = c("ARS", "Rest"),
                                    behav.order = c(1,2))
-
-# Plot results
-ggplot(theta.estim.long) +
-  geom_area(aes(x=date, y=prop, fill = behavior), color = "black", size = 0.25,
-            position = "fill") +
-  labs(x = "\nTime", y = "Proportion of Behaviour\n") +
-  scale_fill_viridis_d("Behaviour") +
-  theme_bw() +
-  theme(axis.title = element_text(size = 16),
-        axis.text.y = element_text(size = 14),
-        axis.text.x.bottom = element_text(size = 12),
-        strip.text = element_text(size = 14, face = "bold"),
-        panel.grid = element_blank()) +
-  facet_wrap(~id, nrow = 2)
-
 
 ##### Assign behavioural states to tracks
 
@@ -353,98 +303,6 @@ tracks.out<- assign_behavior(dat.orig = tracks,
                              theta.estim.long = theta.estim.long,
                              behav.names = c("ARS", "Rest"))
 
-# Map dominant behavior for all IDs
-ggplot() +
-  geom_path(data = tracks.out, aes(x=x, y=y), color="gray60", size=0.25) +
-  geom_point(data = tracks.out, aes(x, y, fill=behav), size=1.5, pch=21, alpha=0.7) +
-  geom_point(data = tracks.out %>%
-               group_by(id) %>%
-               slice(which(row_number() == 1)) %>%
-               ungroup(), aes(x, y), color = "green", pch = 21, size = 3, stroke = 1.25) +
-  geom_point(data = tracks.out %>%
-               group_by(id) %>%
-               slice(which(row_number() == n())) %>%
-               ungroup(), aes(x, y), color = "red", pch = 24, size = 3, stroke = 1.25) +
-  scale_fill_viridis_d("Behavior", na.value = "grey50") +
-  labs(x = "Easting", y = "Northing") +
-  theme_bw() +
-  theme(axis.title = element_text(size = 16),
-        strip.text = element_text(size = 14, face = "bold"),
-        panel.grid = element_blank()) +
-  guides(fill = guide_legend(label.theme = element_text(size = 12),
-                             title.theme = element_text(size = 14))) +
-  facet_wrap(~id, scales = "free", ncol = 2)
-
-# Map of all IDs
-ggplot() +
-  geom_path(data = tracks.out, aes(x, y, color = behav, group = id), size=1.25) +
-  geom_point(data = tracks.out %>%
-               group_by(id) %>%
-               slice(which(row_number() == 1)) %>%
-               ungroup(), aes(x, y), color = "green", pch = 21, size = 3, stroke = 1.25) +
-  geom_point(data = tracks.out %>%
-               group_by(id) %>%
-               slice(which(row_number() == n())) %>%
-               ungroup(), aes(x, y), color = "red", pch = 24, size = 3, stroke = 1.25) +
-  scale_color_viridis_d("Behaviour", na.value = "grey50") +
-  labs(x = "Easting", y = "Northing") +
-  theme_bw() +
-  theme(axis.title = element_text(size = 16),
-        strip.text = element_text(size = 14, face = "bold"),
-        legend.text = element_text(size = 12),
-        legend.title = element_text(size = 14))
-
-# Proportion ARS
-ggplot() +
-  geom_path(data = tracks.out, aes(x, y, color = ARS, group = id), size=1.25, alpha=0.7) +
-  geom_point(data = tracks.out %>%
-               slice(which(row_number() == 1)),
-             aes(x, y), color = "green", pch = 21, size = 3, stroke = 1.25) +
-  geom_point(data = tracks.out %>%
-               slice(which(row_number() == n())),
-             aes(x, y), color = "red", pch = 24, size = 3, stroke = 1.25) +
-  scale_color_distiller("Proportion\nARS", palette = "Spectral", na.value = "grey50") +
-  labs(x = "Easting", y = "Northing", title = "ARS") +
-  theme_bw() +
-  theme(axis.title = element_text(size = 16),
-        strip.text = element_text(size = 14, face = "bold"),
-        panel.grid = element_blank(),
-        legend.text = element_text(size = 12),
-        legend.title = element_text(size = 14))
-
-# Proportion resting
-ggplot() +
-  geom_path(data = tracks.out, aes(x, y, color = Rest, group = id), size=1.25, alpha=0.7) +
-  geom_point(data = tracks.out %>%
-               slice(which(row_number() == 1)),
-             aes(x, y), color = "green", pch = 21, size = 3, stroke = 1.25) +
-  geom_point(data = tracks.out %>%
-               slice(which(row_number() == n())),
-             aes(x, y), color = "red", pch = 24, size = 3, stroke = 1.25) +
-  scale_color_distiller("Proportion\nRest", palette = "Spectral", na.value = "grey50") +
-  labs(x = "Easting", y = "Northing", title = "Resting") +
-  theme_bw() +
-  theme(axis.title = element_text(size = 16),
-        strip.text = element_text(size = 14, face = "bold"),
-        panel.grid = element_blank(),
-        legend.text = element_text(size = 12),
-        legend.title = element_text(size = 14))
-
-## conditions edits
-## Bees to drop is really be bees to keep. So we need the inverse
-beesToRevise <- names(beesToDrop)[! beesToDrop]
-
-## Revise Rest == 1 for all observations
-tracks.outTemp <- tracks.out
-tracks.outTemp[tracks.outTemp$id %in% beesToRevise &   tracks.outTemp$rest == 1 & tracks.outTemp$dt == 250 &
-                 tracks.outTemp$angle > -1 & tracks.outTemp$angle < 1, "behav" ] <- "Rest"
-tracks.outTemp <- tracks.outTemp %>% filter(!is.na(behav))
-
-## join processed dataset
-tracks.outWithMissing <- tracks.out %>% 
-  dplyr::select(names(tracks.outTemp)) %>% 
-  rbind(tracks.outTemp)  
-tracks.out2<-tracks.outWithMissing
 
 #################################################
 #####         Flight Paths         ##################
@@ -483,12 +341,11 @@ tag.map.title <- htmltools::tags$style(HTML("
 "))
 
 
-
 i="CTL-02"
 j=2
-allIds <- unique(tracks.out2$id)
+allIds <- unique(tracks.out$id)
 for( i in allIds) {
-  beeSingular <- tracks.out2 %>% filter(id == i) %>% UTMtoLatLon(.) 
+  beeSingular <- tracks.out %>% filter(id == i) %>% UTMtoLatLon(.) 
   ## need to find out number of steps before second loop
   ## maximum 65 frames for very long steps
   nSteps <- ifelse(nrow(beeSingular) > 65, 65, nrow(beeSingular))
@@ -557,33 +414,35 @@ makeGIFwithPNG <- function(directory, savePath, FPS) {
 }
 
 processedBeeMaps <- list.dirs("./scratch")[-1]
-for(k in 1:length(processedBeeMaps)){
+for(k in 21:length(processedBeeMaps)){
   makeGIFwithPNG(processedBeeMaps[k], paste0(processedBeeMaps[k], ".gif"), 2)
   print(k)
   print(Sys.time())
 }
 
-# Making flight paths for each bee
-library(leaflet)
+#making flight path simple maps without leaflet for paper
 
-allIds <- unique(tracks.out2$id)
-for( i in allIds) {
-  beeSingular <- tracks.out2%>% filter(id == i)
-  beePlot <- ggplot(data = beeSingular, aes(x, y, color = date, label = date)) +
-    geom_path(size=0.7) +
-    geom_text() +
-    scale_color_distiller(palette = "Spectral")
-  labs(x = "Easting", y = "Northing") +
-    theme_bw() +
-    theme(axis.title = element_text(size = 16),
-          strip.text = element_text(size = 14, face = "bold"),
-          legend.text = element_text(size = 12),
-          legend.title = element_text(size = 14))
-  
-  beePlot
-  ggsave( paste0("flightpaths/",i,".pdf"), width = 11, height = 9)
-  print(i)
+library(ggplot2)
+library(dplyr)
+
+tests <- tracks.out %>%
+  group_by(id) %>%
+  mutate(row_number = row_number())
+
+
+allIds <- unique(tests$id)
+for(i in 1:length(allIds)){
+  maxRow <- max(tests[tests$id == allIds[i],"row_number"] )
+  ggplot(tests %>% filter(id == allIds[i]), aes(x = x, y = y, color = row_number)) +
+    geom_path(lwd = 2) +
+    labs(title = paste0(allIds[i]), x = "", y = "") +
+    theme_classic() +
+    theme(text = element_text(size = 16)) +
+    guides(color = guide_legend(title = "Step number")) +
+    scale_color_viridis_c(option = "C", limits = c(1, maxRow), breaks = round(seq(1, maxRow, length.out = 11), 0)) 
+  ggsave(paste0("IndividualBeeFlights/BeePath_",allIds[i],".png"))
 }
+
 ##############################################3
 #### adding landcover for stats ###############
 ###########################################
@@ -593,12 +452,13 @@ library(amt)
 library(raster)
 library(tidyverse)
 
-tracksout.sp <-tracks.out2
+tracksout.flight <- subset(tracks.out, dt == 2000)
+tracksout.sp <-tracksout.flight
 coordinates(tracksout.sp) <-~x+y
 proj4string(tracksout.sp) <- "+proj=lcc +lat_0=40 +lon_0=-96 +lat_1=50 +lat_2=70 +x_0=0 +y_0=0 +datum=NAD83 +units=m
 +no_defs" 
 
-tracksRandom <- spsample(tracksout.sp, 486, "random")
+tracksRandom <- spsample(tracksout.sp, 118, "random")
 
 rand_sl = random_numbers(make_exp_distr(), n = 1e+05)
 rand_ta = random_numbers(make_unif_distr(), n = 1e+05)
@@ -618,7 +478,7 @@ getRandomCoords <- function(df, N) { ## needs dataframe and number of random ste
   return(randomizedCoords)
   
 }
-randomCoords <- getRandomCoords(tracks.out2, 10) ## calculate all random points
+randomCoords <- getRandomCoords(tracksout.flight, 1) ## calculate all random points
 plot(randomCoords$x2, randomCoords$y2)
 
 getTrueCoords <- function(df){ ## revise the true steps to match the same as random
@@ -630,7 +490,7 @@ getTrueCoords <- function(df){ ## revise the true steps to match the same as ran
     dplyr::select(case, x1 = x, y1 = y, x2, y2, sl = step, ta = angle) ## match same data structure
   return(revisedCoordsDF)
 }
-trueCoords <- getTrueCoords(tracks.out2) ## revise data to get all true points
+trueCoords <- getTrueCoords(tracksout.flight) ## revise data to get all true points
 gynetracks.tf <- rbind(randomCoords,trueCoords ) 
 
 #landcover raster needs to be a rasterstack
@@ -656,10 +516,10 @@ landex<- raster::extract(landStack, gynetracks.tfs)
 #add covariates from landStack to the dataframe for SSF
 gynetracks.tfs$agriculture <- landex[,1]
 gynetracks.tfs$developed <- landex[,2]
-gynetracks.tfs$forest <- landex[,3]
-gynetracks.tfs$highFloral <- landex[,4]
-gynetracks.tfs$lowFloral <- landex[,5]
-gynetracks.tfs$modFloral <- landex[,6]
+gynetracks.tfs$earlyFloral <- landex[,3]
+gynetracks.tfs$forest <- landex[,4]
+gynetracks.tfs$lateFloral <- landex[,5]
+gynetracks.tfs$lowFloral<- landex[,6]
 gynetracks.tfs$wetland<- landex[,7]
 head(gynetracks.tfs)
 
@@ -673,22 +533,113 @@ library(survival)
 gynetracks.tfs.NONA <- data.frame(gynetracks.tfs)
 gynetracks.tfs.NONA[is.na(gynetracks.tfs.NONA)] <- 0
 
+## trying to keep the datasets together
+
+SSF.treats <- glm(presence ~ treatcode * (agriculture + developed + forest + 
+                                            earlyFloral + lateFloral + lowFloral + 
+                                            wetland), 
+                  family = "binomial", data = gynetracks.tfs.NONA)
+summary(SSF.treats)
+
+#removing wetland because it has 0 obs and developed which has  3 obs
+
+SSF.treats2 <- glm(presence ~ treatcode * (agriculture + forest + earlyFloral + 
+                                             lateFloral + lowFloral), 
+                   family = "binomial", data = gynetracks.tfs.NONA)
+summary(SSF.treats2)
+
+#nothing significant.
+
 controlNONA <- subset(gynetracks.tfs.NONA, treatcode =="CTL")
 cyanNONA <- subset(gynetracks.tfs.NONA, treatcode =="CYN")
 
-SSF1<-clogit(presence ~ agriculture + developed + forest + highFloral + lowFloral 
-             + modFloral + wetland,
-             method="approximate", na.action="na.fail", 
-             data=controlNONA)
+SSF1 <-glm(presence ~ agriculture + developed + forest + earlyFloral + lowFloral 
+             + lateFloral + wetland, family = "binomial", data=controlNONA)
+summary(SSF1) 
+#there are no observations in wetland, and very few in developed and ag, try removing
+#just those two
 
-SSF2<-clogit(presence ~ agriculture + developed + forest + highFloral + lowFloral 
-             + modFloral + wetland,
-             method="approximate", na.action="na.fail", 
-             data=cyanNONA)
+SSF2 <- glm(presence ~ forest + earlyFloral +lowFloral + lateFloral,
+            family = "binomial", data = controlNONA)
+summary(SSF2) # nothing is significant
 
-library(MuMIn)
-D1 <-dredge(SSF1)
-D2 <- dredge(SSF2)
+# Get confidence intervals for coefficients
+coeff_ci <- confint(SSF2, level = 0.95)
+
+# Exponentiate the confidence intervals for odds ratios
+odds_ratios_ci <- data.frame(exp(coeff_ci))
+odds_ratios_ci$oddsRatio <- as.numeric(exp(coefficients(SSF2)))
+
+names(odds_ratios_ci)[1] <-"lowci"
+names(odds_ratios_ci)[2] <-"highci"
+
+odds_ratios.df <- odds_ratios_ci[row.names(odds_ratios_ci) != "(Intercept)", ]
+odds_ratio.df2 <- odds_ratios.df %>% 
+  tibble::rownames_to_column("landtype")
+
+ggplot(data = odds_ratio.df2, aes(x = landtype, y = oddsRatio)) +
+  theme_classic() +
+  geom_point(size = 4, colour = c("#235789","#235789","#235789", "#235789")) +
+  geom_errorbar(aes( x = landtype , ymin = lowci, 
+                     ymax = highci), width = 0, 
+                colour = c("#235789", "#235789","#235789", "#235789")) +  
+  theme(axis.title.x = element_text (size = 14), 
+        axis.text.x = element_text(size = 12)) +
+  theme(axis.title.y = element_blank(), 
+        axis.text.y = element_text(size = 12)) +
+  scale_x_discrete(limits = c("earlyFloral", "forest", "lateFloral", 
+                              "lowFloral"),
+                   labels = c("forest", "early floral", "late floral",
+                              "low floral")) +
+  scale_y_continuous(name = "odds ratio") +
+  geom_hline(yintercept = 1, linetype = "solid", colour = "dark grey") +
+  coord_flip() +
+  ggtitle("control") +
+  theme(plot.title = element_text(size = 16))
+
+
+SSF4 <-glm(presence ~forest + earlyFloral + lowFloral 
+             + lateFloral , family = "binomial", data=cyanNONA)
+summary(SSF4) # late floral not modeling due to singularities ?
+
+SSF5 <-glm(presence ~ forest + earlyFloral + lowFloral, family = "binomial", 
+           data=cyanNONA)
+summary(SSF5)
+
+# Get confidence intervals for coefficients
+coeff_ci <- confint(SSF5, level = 0.95)
+
+# Exponentiate the confidence intervals for odds ratios
+odds_ratios_ci <- data.frame(exp(coeff_ci))
+odds_ratios_ci$oddsRatio <- as.numeric(exp(coefficients(SSF5)))
+
+odds_ratios_ci <- data.frame(exp(coeff_ci))
+odds_ratios_ci$oddsRatio <- as.numeric(exp(coefficients(SSF5)))
+
+names(odds_ratios_ci)[1] <-"lowci"
+names(odds_ratios_ci)[2] <-"highci"
+
+odds_ratios.df <- odds_ratios_ci[row.names(odds_ratios_ci) != "(Intercept)", ]
+odds_ratio.df2 <- odds_ratios.df %>% 
+  tibble::rownames_to_column("landtype")
+
+ggplot(data = odds_ratio.df2, aes(x = landtype, y = oddsRatio)) +
+  theme_classic() +
+  geom_point(size = 4, colour = c("#8C271E", "#8C271E","black")) +
+  geom_errorbar(aes( x = landtype , ymin = lowci, 
+                     ymax = highci), width = 0, colour = c("#8C271E", "#8C271E",
+                                                           "black")) +  
+  theme(axis.title.x = element_text (size = 14), 
+        axis.text.x = element_text(size = 12)) +
+  theme(axis.title.y = element_blank(), 
+        axis.text.y = element_text(size = 12)) +
+  scale_x_discrete(limits = c("forest", "earlyFloral", "lowFloral"),
+                   labels = c("forest", "early floral","low floral")) +
+  scale_y_continuous(name = "odds ratio") +
+  geom_hline(yintercept = 1, linetype = "solid", colour = "dark grey") +
+  coord_flip() +
+  ggtitle("cyantraniliprole") +
+  theme(plot.title = element_text(size = 16))
 
 ###################################
 ### Step Lengths and turn angles ###
@@ -697,8 +648,8 @@ D2 <- dredge(SSF2)
 #using the previous dataset which had random points, those need to be removed
 
 #Separating dataset to make a daytime column
-gynetracks.period <- separate(tracks.out2, date, into = c("day","time"), sep=" ")
-gynetracks.period <-separate(gynetracks.period, time, sep=":", into=c("hour","minute","sec"))
+gynetracks.period <- tidyr::separate(tracks.out, date, into = c("day","time"), sep=" ")
+gynetracks.period <-tidyr::separate(gynetracks.period, time, sep=":", into=c("hour","minute","sec"))
 
 gynetracks.period[,"daytime"] <- ifelse( as.numeric(gynetracks.period$hour) < 5
                                          | as.numeric(gynetracks.period$hour) > 20, "night", "day")
@@ -712,14 +663,13 @@ proj4string(gynetracks.ps) <- "+proj=lcc +lat_0=40 +lon_0=-96 +lat_1=50 +lat_2=7
 landex<- raster::extract(landcover, gynetracks.ps) #makes a vector of landcover numbers
 gynetracks.ps$landtype <- landex
 gynetracks.psf<-as.data.frame(gynetracks.ps)
-landClasses <- data.frame(landtype = 1:7, landTypeNew = c("agriculture","developed","forest", "highFloral", "modFloral", "lowFloral", "wetland"))
-gynetracks.psf <- gynetracks.psf %>% left_join(landClasses) %>% dplyr::select(-landtype) %>% rename(landtype = landTypeNew)
-
-gynetracks.psf<- gynetracks.psf %>% 
-  filter(!is.na(behav)) %>% 
-  mutate(ARS = ifelse(behav == "ARS", 1, 0),
-         Rest = ifelse(behav == "Rest", 1, 0))
-
+landClasses <- data.frame(landtype = 1:7, 
+                          landTypeNew = c("agriculture","developed","earlyFloral", 
+                          "forest", "lateFloral", "lowFloral", "wetland"))
+gynetracks.psf <- gynetracks.psf %>% 
+  left_join(landClasses) %>% 
+  dplyr::select(-landtype) %>% 
+  rename(landtype = landTypeNew)
 
 #adding treatcode column
 gynetracks.psf2 <- gynetracks.psf %>% 
@@ -737,148 +687,145 @@ stat.desc(step.cyan)
 library(car)
 
 s1 <- lm(step~treatcode, data=gynetracks.psf2)
-car::Anova(s1, type =2) #yes significant
+car::Anova(s1, type =2) #no not significant
+pwr::pwr.f2.test(u = 1, v = NULL, f2 = 0.009 , sig.level = 0.05, power = 0.8)
+#not enough power to test interactions
 
-# is there a difference between treatments x time period for step length
+# possibly individual factors
 
-s2 <- lm (step ~ treatcode * daytime, data = gynetracks.psf2)
-car::Anova(s2, type = 3)
+s2 <- lm (step ~ treatcode + daytime + landtype, data = gynetracks.psf2)
+car::Anova(s2, type = 2) #none are significant. 
+#power is still low
 
-#step length x treatment x land cover
-
-s3 <- lm (step ~ treatcode * landtype, data= gynetracks.psf2)
-car::Anova(s3, type = 3)
-
-#step length x treatment x land cover x time period
-
-s4<- lm (step ~ treatcode * landtype * daytime, data= gynetracks.psf2)
-car::Anova(s4, type = 3)
-library(emmeans)
-s4.a <-emmeans(s4, pairwise ~ treatcode * landtype *daytime, data=gynetracks.psf2)
-s4.b <- data.frame(s4.a$contrasts) %>% filter(p.value < 0.05)
-
-# step length x landcover plot
-
-se <- function(x) sd(x, na.rm =T) / sqrt(length(x[!is.na(x)]))
-stepplotdat <-gynetracks.psf2 %>% group_by (landtype) %>% 
-  summarize (avgStep = mean(step, na.rm=T), errorstep = se(step))
-
-library(ggplot2)
-ggplot(data=stepplotdat, aes(x=landtype, y=avgStep)) +
-  theme_classic() +
-  geom_bar(stat="identity", fill="#858786") +
-  geom_errorbar(aes(x = landtype, ymin = avgStep - errorstep+1, ymax = avgStep + errorstep+1), 
-                width = 0) +
-  theme(axis.title.x=element_blank(), axis.text.x=element_text(size = 14)) +
-  theme(axis.title.y=element_text(size=14), axis.text.y=element_text(size=12)) +
-  scale_y_continuous(name= "average step length") +
-  scale_x_discrete(limits=c("agriculture", "forest", "lowFloral", "modFloral", "highFloral"),
-                   labels=c("agriculture", "forest", "low floral", "moderate floral", "high floral"))
 #### Turning angle
-#is there a difference between treatments for turning angle
-library(car)
-
 t1 <- lm(angle~treatcode, data=gynetracks.psf2)
 car::Anova(t1, type =2) #not significant
+pwr::pwr.f2.test(u = 1, v = 281, f2 = 0.0009 , sig.level = 0.05, power = NULL)
+#power is very low 0.08
 
-# is there a difference between treatments x time period for turning angles
+t2 <- lm (angle ~ treatcode + daytime + landtype, data = gynetracks.psf2)
+car::Anova(t2, type = 2) #no significant differnce
+pwr::pwr.f2.test(u = 1, v = 276, f2 = 0.03 , sig.level = 0.05, power = NULL)
+#power is good
 
-t2 <- lm (angle ~ treatcode * daytime, data = gynetracks.psf2)
-car::Anova(t2, type = 3)
+####  Net squared displacement NSD
 
-#turning angle x treatment x land cover
+gynetracks.nsd <-subset(gynetracks.psf2, dt == 2000)
 
-t3 <- lm (angle ~ treatcode * landtype, data= gynetracks.psf2)
-car::Anova(t3, type = 3)
-library(emmeans)
-t3.a <-emmeans(t3, pairwise ~ treatcode * landtype, data=gynetracks.psf2)
-t3.b <- data.frame(t3.a$contrasts) %>% filter(p.value < 0.05)
-t3.c <-emmeans(t3, pairwise ~ landtype, data = gynetracks.psf2)
+n1 <- lm(NSD ~ treatcode, data=gynetracks.nsd)
+car::Anova(n1, type =2) #significant
+pwr::pwr.f2.test(u = 1, v = 116, f2 = 0.05 , sig.level = 0.05, power = NULL)
+#power isn't great 0.67
 
-#turning angle x treatment x land cover x time period
+## NSX x treatment x daytime 
+n2 <- lm (NSD ~ treatcode * daytime, data = gynetracks.nsd)
+car::Anova(n2, type = 3)# significant
+n2.a <- emmeans::emmeans(n2, pairwise ~ treatcode * daytime, data = gynetracks.nsd)
+pwr::pwr.f2.test(u = 1, v = 114, f2 = 0.08 , sig.level = 0.05, power = NULL)
+#power is good 0.86
 
-t4<- lm (angle ~ treatcode * landtype * daytime, data= gynetracks.psf2)
-car::Anova(t4, type = 3)
-library(emmeans)
-t4.a <-emmeans(t4, pairwise ~ treatcode * landtype *da, data=gynetracks.psf2)
-t4.b <- data.frame(t4.a$contrasts) %>% filter(p.value < 0.05)
+# NSD x treatment x land cover
 
-### behaviour as a response variable  ###
+n3 <- lm (NSD ~ treatcode * landtype, data= gynetracks.nsd)
+car::Anova(n3, type = 3)
+n3.a <- emmeans::emmeans(n3, pairwise ~ treatcode * landtype, data = gynetracks.nsd)
 
-b1<-glm(ARS ~ treatcode, family="binomial", data=gynetracks.psf2) 
-anova(b1, test="Chisq") #significant
-b1.a<- emmeans(b1, pairwise ~treatcode, data=gynetracks.psf2)
-
-b2<-glm(ARS~treatcode*daytime, family="binomial", data=gynetracks.psf2)
-anova(b2, test="Chisq") #significant
-b2.a<-emmeans(b2, pairwise~treatcode *daytime, data=gynetracks.psf2)
-
-b3<- glm(ARS~treatcode * landtype, family="binomial", data=gynetracks.psf2)
-anova(b3, test="Chisq")  #significant
-b3.a<-emmeans(b3, pairwise~treatcode *landtype, data=gynetracks.psf2)
-
-b4<-glm(ARS~treatcode * landtype * daytime, family="binomial", data=gynetracks.psf2)
-anova(b4, test="Chisq") #significant
-
-
-b5<-glm(Rest~treatcode, family="binomial", data=gynetracks.psf2)
-anova(b5, test="Chisq")
-# significant
-
-b6<-glm(Rest~treatcode*landtype, family="binomial", data=gynetracks.psf2)
-anova(b6, test="Chisq")
-b6.a<-emmeans(b6, pairwise~treatcode*landtype, data=gynetracks.psf2)
-
-b7 <- glm(Rest~treatcode * daytime, family = "binomial", data=gynetracks.psf2)
-anova(b7, test="Chisq") #not significant
-
-b8 <- glm(Rest ~treatcode*landtype*daytime, family = "binomial", data=gynetracks.psf2)
-anova(b8, test = "Chisq") #three way interaction not significant 
-
+#figure for NSD by treatment and daytime
 se <- function(x) sd(x, na.rm =T) / sqrt(length(x[!is.na(x)]))
 
-aggtab <- gynetracks.psf2[,c("treatcode", "behav")]
-behavPlot<-aggtab %>% 
-  group_by(treatcode) %>% 
-  mutate(isRest = behav=="Rest", isARS = behav=="ARS") %>% 
-  summarize(rest = sum(isRest)/length(isRest), ARS = sum(isARS)/length(isARS)) %>% 
-  tidyr::gather(behav, prop, 2:3) %>% 
-  mutate(prop = round(prop,4))
+NSDplot1 <- gynetracks.nsd[,c("treatcode", "NSD", "daytime")] %>% 
+  group_by(daytime, treatcode) %>% 
+  summarise(avgNSD = mean(NSD), errorNSD = se(NSD))
 
-ggplot(behavPlot, aes(x=treatcode, y=prop, fill=behav)) +
+ggplot(NSDplot1, aes(x=treatcode, y=(avgNSD/1000), fill=daytime)) +
   geom_bar (stat="identity", position = position_dodge()) +
+  geom_errorbar(aes(ymin = avgNSD/1000 - errorNSD/1000, ymax = avgNSD/1000 + errorNSD/1000),
+                width = 0, position = position_dodge(width=0.9)) +
   theme_classic () +
-  scale_fill_manual(values = c("#59C9A5", "#1C3144"), name = "behaviour") +
-  scale_x_discrete(name="", labels = c("control", "cyantraniliprole")) +
-  scale_y_continuous(name = "proportion of behaviour") +
+  scale_fill_manual(values = c("#78C0E0", "#27187E"), name = "time of day") +
+  scale_x_discrete(limits=c("CTL", "CYN"),
+                   labels=c("control", "cyantraniliprole")) +
+  scale_y_continuous(name = "mean squared displacement (km)", 
+                     labels = scales::comma) +
   theme (axis.text.x = element_text(size=12),
+         axis.title.x = element_blank(), 
          axis.title.y  = element_text(size=14),
          axis.text.y = element_text(size =12),
          legend.title = element_text(size = 14),
          legend.text = element_text(size =12))
 
-aggtab2 <- gynetracks.psf2[,c("treatcode", "behav", "landtype")]
-behavPlot2<-aggtab2 %>% 
-  group_by(treatcode, landtype) %>% 
-  mutate(isRest = behav=="Rest", isARS = behav=="ARS") %>% 
-  summarize(rest = sum(isRest)/length(isRest), ARS = sum(isARS)/length(isARS)) %>% 
-  tidyr::gather(behav, prop, 3:4) %>% 
-  mutate(prop = round(prop,4))
+# figure for NSD and land cover
+se <- function(x) sd(x, na.rm =T) / sqrt(length(x[!is.na(x)]))
 
-labels <- c(CTL = "control", CYN = "cyantraniliprole")
-ggplot(behavPlot2, aes(x= landtype, y = prop, fill=behav)) + theme_classic() + 
-  facet_grid(treatcode ~ ., labeller = labeller(treatcode = labels)) + 
-  geom_bar(stat = "identity", position = position_dodge()) +
-  scale_fill_manual(values = c("#59C9A5", "#1C3144"), name = "behaviour") +
-  scale_x_discrete(name="", limits=c("agriculture", "forest", "highFloral", "modFloral", "lowFloral"),
-                   labels=c("agriculture", "forest", "high floral", "moderate floral", "low floral")) +
-  scale_y_continuous(name="proportion of behaviour") +
-  theme(strip.text.y = element_text(size=12),
-        axis.text.x = element_text(size=12),
-        axis.title.y  = element_text(size=14),
-        legend.title = element_text(size = 14),
-        legend.text = element_text(size =12))
+NSDplot2 <- gynetracks.nsd[,c("treatcode", "NSD", "landtype")] %>% 
+  group_by(landtype, treatcode) %>% 
+  summarize(avgNSD = mean(NSD), errorNSD = se(NSD))
 
+missingData <- data.frame(landtype = c("agriculture","forest"), treatcode =c("CYN","CYN"), avgNSD=c(0,0), errorNSD=c(0,0))
+allData <- rbind(NSDplot2, missingData)
+
+ggplot(allData, aes(x=landtype, y=avgNSD/1000, fill=treatcode)) +
+  geom_bar (stat="identity", position = position_dodge(preserve ="single")) +
+  geom_errorbar(aes(ymin = avgNSD/1000 - errorNSD/1000, ymax = avgNSD/1000 + errorNSD/1000),
+                width = 0, position = position_dodge(width=0.9)) +
+  theme_classic () +
+  scale_fill_manual(values = c("#20BF55", "#8D6A9F"), name = "",
+                    breaks = c("CTL", "CYN"),
+                    labels = c("control", "cyantraniliprole")) +
+  scale_x_discrete(limits=c("agriculture", "forest", "earlyFloral", "lateFloral", 
+                            "lowFloral"),
+                   labels=c("agriculture", "forest", "early floral", "late floral", 
+                            "low floral")) +
+  scale_y_continuous(name = "mean squared displacement (km)",
+                     labels = scales::comma) +
+  theme (axis.text.x = element_text(size=12),
+         axis.title.x = element_blank(), 
+         axis.title.y  = element_text(size=14),
+         axis.text.y = element_text(size =12),
+         legend.title = element_text(size = 14),
+         legend.text = element_text(size =12))
+
+
+###########################################
+### behaviour as a response variable  ###
+###############################################
+
+#updated to betaregression
+b1 <- betareg::betareg(Rest ~ treatcode, data = na.omit(gynetracks.psf2))
+lmtest::lrtest(b1) #significant
+pwr::pwr.f2.test(u = 1, v = 5, f2 = 0.09 , sig.level = 0.05, power = NULL)
+
+b2<-betareg::betareg(Rest ~ treatcode + daytime + landtype, data=gynetracks.psf2)
+lmtest::lrtest(b2) #not significant
+
+
+se <- function(x) sd(x, na.rm =T) / sqrt(length(x[!is.na(x)]))
+
+behavplot1 <- gynetracks.psf2 %>%
+  select(ARS, Rest, landtype, treatcode) %>%
+  gather(behav, value, ARS:Rest) %>%
+  group_by(treatcode, behav) %>%
+  summarize(means = mean(value, na.rm=T), ses = se(value))
+
+
+ggplot(behavplot1 , aes(x=behav, y = means, fill = treatcode)) +
+  geom_bar (stat="identity", 
+            position = position_dodge()) +
+geom_errorbar(aes(ymin = means - ses, ymax = means + ses), 
+              position = position_dodge(width=0.8), width = 0) +
+  theme_classic () +
+  scale_fill_manual(values = c("#20BF55", "#8D6A9F"), name = "", 
+                    breaks = c("CTL", "CYN"),
+                    labels = c ("control", "cyantranilprole")) +
+  scale_y_continuous(name = "mean proportion of behaviour") +
+  theme (axis.text.x = element_text(size=12),
+         axis.title.x = element_blank(), 
+         axis.title.y  = element_text(size=14),
+         axis.text.y = element_text(size =12),
+         legend.title = element_text(size = 14),
+         legend.text = element_text(size =12))
+
+  
 ###########################
 ### Kernel Density  #######
 #############################
@@ -979,14 +926,6 @@ write.csv(k2postSig, "k2Post.csv", row.names= F)
 
 kd.data4 <- subset(kd.data2, daytime!="Totalvalues") #use this for any daytime stats
 
-kd3 <- lm(kdensity ~ treatment* as.factor(SpringLandcoverRaster) * daytime, 
-          data = kd.data4)
-car::Anova(kd3, type=2)
-kd3.a <- emmeans(kd3, pairwise~treatment * as.factor(SpringLandcoverRaster) *daytime, 
-                 data=kd.data4)
-k3postSig <- data.frame(kd3.a$contrasts) %>% filter(p.value < 0.05)
-write.csv(k3postSig, "k3Post.csv", row.names= F)
-
 kd4 <- lm(kdensity ~ treatment* daytime, data = kd.data4)
 car::Anova(kd4, type=2)
 kd4.a <- emmeans(kd4, pairwise~treatment *daytime, data=kd.data4)
@@ -994,25 +933,23 @@ k4postSig <- data.frame(kd4.a$contrasts) %>% filter(p.value < 0.05)
 write.csv(k4postSig, "k4Post.csv", row.names= F)
 
 
-##plotting results of 3 way interaction
+### plotting results for kernel density
+# one plot for treatment x land cover
+# another plot for treatment x daytime 
 
 se <- function(x) sd(x, na.rm =T) / sqrt(length(x[!is.na(x)]))
 
-kdplotdat <-kd.data4 %>% 
-  group_by(SpringLandcoverRaster, treatment, daytime) %>% 
-  summarize(meanKD = mean(kdensity*1000, na.rm=T), 
-            errorval = se(kdensity*1000))
+kdplotdat1 <-kd.data4 %>% 
+  group_by(SpringLandcoverRaster, treatment) %>% 
+  summarize(meanKD = mean(kdensity*100000, na.rm=T), 
+            errorval = se(kdensity*100000))
 
-Timelabels <- c(Dayvalues = "day", Nightvalues = "night")
-Treatlabels <- c(control = "control", cyan = "cyantraniliprole")
-
-ggplot(kdplotdat, aes(x = SpringLandcoverRaster, y = meanKD)) + 
-  geom_bar(stat = "identity", fill ="#858786") +
+ggplot(kdplotdat1, aes(x = SpringLandcoverRaster, y = meanKD, fill = treatment)) + 
+  geom_bar(stat = "identity", position = position_dodge()) +
   geom_errorbar(aes(x = SpringLandcoverRaster, ymin = meanKD - errorval, 
-                    ymax = meanKD + errorval), width = 0) +
+                    ymax = meanKD + errorval), position = position_dodge(0.9),
+                width = 0) +
   theme_classic() +
-  facet_grid(treatment ~ daytime, labeller = labeller (daytime = Timelabels,
-                                                       treatment = Treatlabels)) +
   scale_x_discrete(limits=c("1", "2", "4", "3", "5", "6", "7"),
                    labels=c("agriculture", "developed", "forest", "early\nfloral",  
                             "late\nfloral", "low\nfloral",
@@ -1020,8 +957,38 @@ ggplot(kdplotdat, aes(x = SpringLandcoverRaster, y = meanKD)) +
   theme(axis.text.x = element_text (size = 12),
         axis.title.y = element_text(size = 14),
         strip.text.x = element_text(size=14),
-        strip.text.y = element_text(size=14)) +
-  scale_y_continuous(name="mean kernel density") 
+        strip.text.y = element_text(size=14),
+        legend.text = element_text(size = 12)) +
+  scale_y_continuous(name="mean kernel density") +
+  scale_fill_manual(values = c("#20BF55", "#8D6A9F"),
+                    name = "", 
+                      breaks = c("control", "cyan"), 
+                      labels = c("control", "cyantraniliprole"))
+# dayplot 
+
+kdplotdat2 <-kd.data4 %>% 
+  group_by(daytime, treatment) %>% 
+  summarize(meanKD = mean(kdensity*100000, na.rm=T), 
+            errorval = se(kdensity*100000))
+
+ggplot(kdplotdat2, aes(x = treatment, y = meanKD, fill = daytime)) + 
+  geom_bar(stat = "identity", position = position_dodge()) +
+  geom_errorbar(aes(x = treatment, ymin = meanKD - errorval, 
+                    ymax = meanKD + errorval), position = position_dodge(0.9),
+                width = 0) +
+  theme_classic() +
+  scale_x_discrete(limits=c("control", "cyan"), 
+                   labels = c("control", "cyantraniliprole"), name="") +
+  theme(axis.text.x = element_text (size = 12),
+        axis.title.y = element_text(size = 14),
+        strip.text.x = element_text(size=14),
+        strip.text.y = element_text(size=14),
+        legend.text = element_text(size = 12)) +
+  scale_y_continuous(name="mean kernel density") +
+  scale_fill_manual(values = c("#78C0E0", "#27187E"),
+                    name = "", 
+                    breaks = c("Dayvalues", "Nightvalues"), 
+                    labels = c("day", "night"))
 
 
 #need to change crs for plotting with leaflette
@@ -1152,7 +1119,7 @@ daysFlown.df<-data.frame(daysFlown)
 daysFlown.df2<- daysFlown.df %>% 
   mutate(Treatment = case_when(
     startsWith(AnimalID, "CTL") ~ "control",
-    startsWith(A, "CYN") ~ "cyantraniliprole"))
+    startsWith(AnimalID, "CYN") ~ "cyantraniliprole"))
 
 daysFlown.df2  %>%
   group_by(Treatment) %>%
@@ -1178,9 +1145,32 @@ f1.b <- glm.nb(as.numeric(daysFlown) ~ Treatment,
 summary(f1.b) #possibly still overdispersed 
 library(DHARMa) #AER only for poisson so trying this one
 simf1.b <- simulateResiduals(f1.b)
-testOverdispersion(simf1.b) # no longer overdispersed
+testDispersion(simf1.b) # still overdispersed
 
-anova(f1.b, test = "Chisq")
+f1.c <- glm(as.numeric(daysFlown) ~ Treatment, family="quasipoisson", 
+            data = daysFlown.df2)
+summary(f1.c) ## still overdispersed
+
+# could try this bayes model later if you want but need to install
+#the package, didn't want to do it as it needed to restart. 
+
+library(rstanarm)
+
+# Convert response variable to integer type if it's not already
+daysFlown.df2$daysFlown <- as.integer(daysFlown.df2$daysFlown)
+
+# Fit a Bayesian Poisson regression model
+bayesian_model <- stan_glm(daysFlown ~ Treatment, 
+                           family = poisson(), 
+                           data = daysFlown.df2,
+                           chains = 4, # Number of Markov chains
+                           iter = 2000) # Number of iterations
+
+# Summary of the Bayesian model
+summary(bayesian_model)
+
+
+
 
 #extracting the last detection point
 
@@ -1262,3 +1252,5 @@ landmap <-ggplot(data = landcover.df) +
          axis.title.y = element_text(size =14),
          axis.text.y = element_text(size = 12))
 landmap
+
+
